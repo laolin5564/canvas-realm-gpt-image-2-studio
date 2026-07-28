@@ -9,6 +9,7 @@ import {
   updateOpenAIOAuthAccountTokens,
 } from "./db";
 import { apiSizeForOption } from "./image-options";
+import { fitReferenceImagesToBudget } from "./image-upload";
 import {
   decodeOpenAIIdToken,
   decryptToken,
@@ -22,7 +23,7 @@ import { extractOpenAIOAuthImagesFromResponsesStream } from "./openai-image-brid
 import { formatModelError } from "./model-error";
 import { fetchWithOptionalProxy } from "./proxy";
 import type { GenerationTaskRow, ImageProvider, OpenAIOAuthAccountRow } from "./types";
-import { assertSupportedImage, assertSupportedImageBytes, mimeFromFileName, readStorageFile } from "./storage";
+import { assertSupportedImage, assertSupportedImageBytes, readStorageFile } from "./storage";
 
 interface ImageApiItem {
   b64_json?: string;
@@ -263,11 +264,22 @@ async function requestImageEdit(
 
   const form = new FormData();
   form.append("model", settings.imageModel);
-  for (const sourceImagePath of sourceImagePaths) {
-    const bytes = await readStorageFile(sourceImagePath).then((image) => image.bytes);
-    const mimeType = mimeFromFileName(sourceImagePath);
-    const blob = new Blob([new Uint8Array(bytes)], { type: mimeType });
-    form.append("image", blob, path.basename(sourceImagePath));
+  const sourceImages = await Promise.all(
+    sourceImagePaths.map(async (sourceImagePath) => {
+      const image = await readStorageFile(sourceImagePath);
+      return {
+        ...image,
+        fileName: path.basename(sourceImagePath),
+      };
+    }),
+  );
+  const uploadImages = await fitReferenceImagesToBudget(
+    sourceImages,
+    appConfig.sub2apiMaxUploadBytes,
+  );
+  for (const image of uploadImages) {
+    const blob = new Blob([new Uint8Array(image.bytes)], { type: image.mimeType });
+    form.append("image", blob, image.fileName);
   }
   form.append("prompt", buildPrompt(task));
   form.append("n", String(quantity));

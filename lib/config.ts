@@ -75,6 +75,7 @@ export const appConfig = {
   imageStorageDir: resolvePathFromEnv(process.env.IMAGE_STORAGE_DIR, "data/images"),
   sub2apiBaseUrl: process.env.SUB2API_BASE_URL || "https://s2a.laolin.ai/v1",
   sub2apiHostHeader: normalizeHttpHostHeader(process.env.SUB2API_HOST_HEADER),
+  sub2apiMaxUploadBytes: readNumberEnv("SUB2API_MAX_UPLOAD_BYTES", 1_100_000),
   sub2apiApiKey: process.env.SUB2API_API_KEY || "",
   imageModel: process.env.IMAGE_MODEL || "gpt-image-2",
   promptOptimizerModel: process.env.PROMPT_OPTIMIZER_MODEL || "gpt-5.5",
