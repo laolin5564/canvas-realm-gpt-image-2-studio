@@ -17,6 +17,7 @@ import {
   shouldRefreshOpenAIToken,
   tokenExpiresAt,
 } from "./openai-oauth";
+import { withOptionalHostHeader } from "./http-host";
 import { extractOpenAIOAuthImagesFromResponsesStream } from "./openai-image-bridge";
 import { formatModelError } from "./model-error";
 import { fetchWithOptionalProxy } from "./proxy";
@@ -44,6 +45,7 @@ interface ImageRequestSettings {
   channelName?: string;
   baseUrl: string;
   bearerToken: string;
+  hostHeader?: string;
   imageModel: string;
   imageConcurrency: number;
   openaiOAuthProxyUrl?: string;
@@ -166,6 +168,7 @@ async function resolveImageProviderCandidates(signal?: AbortSignal): Promise<Ima
     channelName: channel.name,
     baseUrl: channel.baseUrl.replace(/\/+$/, ""),
     bearerToken: channel.apiKey,
+    hostHeader: appConfig.sub2apiHostHeader,
     imageModel: channel.model,
     imageConcurrency: settings.imageConcurrency,
   }));
@@ -231,11 +234,11 @@ async function requestTextToImage(
 
   const response = await fetch(`${settings.baseUrl}/images/generations`, {
     method: "POST",
-    headers: {
+    headers: withOptionalHostHeader({
       Authorization: `Bearer ${settings.bearerToken}`,
       "Content-Type": "application/json",
       "User-Agent": IMAGE_USER_AGENT,
-    },
+    }, settings.hostHeader),
     body: JSON.stringify(body),
     signal: requestSignal(signal),
   });
@@ -275,10 +278,10 @@ async function requestImageEdit(
 
   const response = await fetch(`${settings.baseUrl}/images/edits`, {
     method: "POST",
-    headers: {
+    headers: withOptionalHostHeader({
       Authorization: `Bearer ${settings.bearerToken}`,
       "User-Agent": IMAGE_USER_AGENT,
-    },
+    }, settings.hostHeader),
     body: form,
     signal: requestSignal(signal),
   });

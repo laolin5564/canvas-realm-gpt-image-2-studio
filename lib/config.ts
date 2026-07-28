@@ -1,5 +1,6 @@
 import path from "node:path";
 import { existsSync, readFileSync } from "node:fs";
+import { normalizeHttpHostHeader } from "./http-host";
 import { defaultUpdateCheckUrl, defaultUpdateRepo } from "./version";
 
 loadLocalEnvFiles();
@@ -73,6 +74,7 @@ export const appConfig = {
   databasePath: resolvePathFromEnv(process.env.DATABASE_URL, "data/app.db"),
   imageStorageDir: resolvePathFromEnv(process.env.IMAGE_STORAGE_DIR, "data/images"),
   sub2apiBaseUrl: process.env.SUB2API_BASE_URL || "https://s2a.laolin.ai/v1",
+  sub2apiHostHeader: normalizeHttpHostHeader(process.env.SUB2API_HOST_HEADER),
   sub2apiApiKey: process.env.SUB2API_API_KEY || "",
   imageModel: process.env.IMAGE_MODEL || "gpt-image-2",
   promptOptimizerModel: process.env.PROMPT_OPTIMIZER_MODEL || "gpt-5.5",

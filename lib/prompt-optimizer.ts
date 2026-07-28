@@ -1,4 +1,5 @@
 import type { ImageProvider, OpenAIOAuthAccountRow } from "./types";
+import { withOptionalHostHeader } from "./http-host";
 
 export interface PromptOptimizationInput {
   prompt: string;
@@ -31,6 +32,7 @@ interface PromptOptimizerRuntimeSettings {
   provider: ImageProvider;
   baseUrl: string;
   bearerToken: string;
+  hostHeader?: string;
   model: string;
   openaiOAuthProxyUrl?: string | null;
   oauthAccountId?: string | null;
@@ -118,7 +120,13 @@ export async function optimizePromptWithModel(input: PromptOptimizationInput): P
     return requestOpenAIOAuthPromptOptimization(settings, userPrompt);
   }
 
-  const responsesError = await requestResponsesApi(settings.baseUrl, settings.model, settings.bearerToken, userPrompt)
+  const responsesError = await requestResponsesApi(
+    settings.baseUrl,
+    settings.model,
+    settings.bearerToken,
+    userPrompt,
+    settings.hostHeader,
+  )
     .then((payload) => {
       throw new OptimizedPromptResult(extractOptimizedPrompt(payload));
     })
@@ -136,7 +144,13 @@ export async function optimizePromptWithModel(input: PromptOptimizationInput): P
     throw responsesError;
   }
 
-  const payload = await requestChatCompletionsApi(settings.baseUrl, settings.model, settings.bearerToken, userPrompt);
+  const payload = await requestChatCompletionsApi(
+    settings.baseUrl,
+    settings.model,
+    settings.bearerToken,
+    userPrompt,
+    settings.hostHeader,
+  );
   return extractOptimizedPrompt(payload);
 }
 
@@ -172,6 +186,7 @@ async function resolvePromptOptimizerRuntimeSettings(): Promise<PromptOptimizerR
     provider: "sub2api",
     baseUrl: imageSettings.sub2apiBaseUrl.replace(/\/+$/, ""),
     bearerToken: imageSettings.sub2apiApiKey,
+    hostHeader: appConfig.sub2apiHostHeader,
     model: promptSettings.model,
   };
 }
@@ -216,13 +231,19 @@ async function getFreshOpenAIAccessTokenForPrompt(
   }
 }
 
-async function requestResponsesApi(baseUrl: string, model: string, apiKey: string, userPrompt: string): Promise<unknown> {
+async function requestResponsesApi(
+  baseUrl: string,
+  model: string,
+  apiKey: string,
+  userPrompt: string,
+  hostHeader?: string,
+): Promise<unknown> {
   const response = await fetch(`${baseUrl}/responses`, {
     method: "POST",
-    headers: {
+    headers: withOptionalHostHeader({
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
-    },
+    }, hostHeader),
     body: JSON.stringify({
       model,
       input: [
@@ -234,13 +255,19 @@ async function requestResponsesApi(baseUrl: string, model: string, apiKey: strin
   return readOptimizerResponse(response, "Responses");
 }
 
-async function requestChatCompletionsApi(baseUrl: string, model: string, apiKey: string, userPrompt: string): Promise<unknown> {
+async function requestChatCompletionsApi(
+  baseUrl: string,
+  model: string,
+  apiKey: string,
+  userPrompt: string,
+  hostHeader?: string,
+): Promise<unknown> {
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
-    headers: {
+    headers: withOptionalHostHeader({
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
-    },
+    }, hostHeader),
     body: JSON.stringify({
       model,
       messages: [
