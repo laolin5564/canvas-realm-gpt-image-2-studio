@@ -15,6 +15,7 @@ import {
   Pencil,
   Pin,
   PinOff,
+  QrCode,
   RefreshCw,
   Save,
   Send,
@@ -56,6 +57,7 @@ interface ChatImageAttachment {
 const modes: WorkbenchMode[] = ["text_to_image", "image_to_image"];
 const quantityOptions = [1, 2, 4] as const;
 const supportedImageMimeTypes = ["image/png", "image/jpeg", "image/webp"] as const;
+const quotaRefreshEventName = "aiimage:quota-updated";
 
 function taskDisplayLabel(task: PublicTask): string {
   return task.progressStage ? progressStageLabels[task.progressStage] : statusLabels[task.status];
@@ -81,6 +83,37 @@ interface CreateTaskResponse {
 
 interface PromptOptimizerResponse {
   prompt: string;
+}
+
+interface AiImageQuotaResponse {
+  quota: {
+    open: boolean;
+    remaining: number | null;
+    expireTime: string | null;
+    monthlyQuota?: number | null;
+    monthUsed?: number;
+  };
+  unitSize: number;
+  message?: string;
+}
+
+interface AiImagePaymentResponse {
+  order: {
+    qrCodeUrl: string;
+    orderId: string;
+    totalPriceFen: number;
+    unitCount: number;
+    generationCount: number;
+  };
+  unitSize: number;
+}
+
+interface AiImageOrderStatusResponse {
+  status: {
+    complete: number;
+    paid: boolean;
+  };
+  quota?: AiImageQuotaResponse["quota"];
 }
 
 interface CaseTryPromptPayload {
@@ -298,6 +331,16 @@ export function WorkbenchClient() {
   const [chatBusy, setChatBusy] = useState(false);
   const [cancelingTaskId, setCancelingTaskId] = useState<string | null>(null);
   const [retryingTaskId, setRetryingTaskId] = useState<string | null>(null);
+  const [aiQuota, setAiQuota] = useState<AiImageQuotaResponse["quota"] | null>(null);
+  const [aiQuotaLoading, setAiQuotaLoading] = useState(false);
+  const [buyPanelOpen, setBuyPanelOpen] = useState(false);
+  const [activationPanelOpen, setActivationPanelOpen] = useState(false);
+  const [buyUnitCount, setBuyUnitCount] = useState(1);
+  const [buyOrder, setBuyOrder] = useState<AiImagePaymentResponse["order"] | null>(null);
+  const [buyOrderPaid, setBuyOrderPaid] = useState(false);
+  const [buyBusy, setBuyBusy] = useState(false);
+  const [activationCode, setActivationCode] = useState("");
+  const [activationBusy, setActivationBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -321,6 +364,17 @@ export function WorkbenchClient() {
   const hasChatPrimaryAttachment = chatAttachments.some((attachment) => attachment.role === "primary");
   const activeConversationPromptKey = activeConversation?.id ?? "";
   const activeConversationFixedPrompt = activeConversation?.fixedPrompt ?? "";
+  const aiQuotaRemainingLabel = aiQuota?.remaining === null ? "不限" : `${aiQuota?.remaining ?? 0} 次`;
+
+  const refreshAiQuota = useCallback(async () => {
+    setAiQuotaLoading(true);
+    try {
+      const payload = await apiJson<AiImageQuotaResponse>("/api/billing/ai-image");
+      setAiQuota(payload.quota);
+    } finally {
+      setAiQuotaLoading(false);
+    }
+  }, []);
 
   const refreshConversations = useCallback(async () => {
     const payload = await apiJson<ConversationListResponse>("/api/conversations?limit=24");
@@ -343,7 +397,8 @@ export function WorkbenchClient() {
       .then((payload) => setTemplates(payload.templates))
       .catch((caught: Error) => setError(caught.message));
     refreshConversations().catch((caught: Error) => setError(caught.message));
-  }, [refreshConversations]);
+    refreshAiQuota().catch((caught: Error) => setError(caught.message));
+  }, [refreshAiQuota, refreshConversations]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -356,6 +411,53 @@ export function WorkbenchClient() {
   useEffect(() => {
     refreshActiveConversation().catch((caught: Error) => setError(caught.message));
   }, [refreshActiveConversation]);
+
+  useEffect(() => {
+    if (!buyPanelOpen || !buyOrder || buyOrderPaid) {
+      return;
+    }
+    let disposed = false;
+    const timer = window.setInterval(() => {
+      apiJson<AiImageOrderStatusResponse>(`/api/billing/ai-image?orderId=${encodeURIComponent(buyOrder.orderId)}`)
+        .then(async (payload) => {
+          if (disposed || !payload.status.paid) {
+            return;
+          }
+          setBuyOrderPaid(true);
+          setError("");
+          if (payload.quota) {
+            setAiQuota(payload.quota);
+          }
+          setMessage("支付成功，额度已刷新，弹窗将在 3 秒后自动关闭。");
+          window.dispatchEvent(new Event(quotaRefreshEventName));
+          if (!payload.quota) {
+            await refreshAiQuota();
+          }
+        })
+        .catch((caught: Error) => {
+          if (!disposed) {
+            setError(caught.message);
+          }
+        });
+    }, 2500);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [buyOrder, buyOrderPaid, buyPanelOpen, refreshAiQuota]);
+
+  useEffect(() => {
+    if (!buyPanelOpen || !buyOrderPaid) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setBuyPanelOpen(false);
+      setBuyOrder(null);
+      setBuyOrderPaid(false);
+      setMessage("");
+    }, 3000);
+    return () => window.clearTimeout(timer);
+  }, [buyOrderPaid, buyPanelOpen]);
 
   useEffect(() => {
     if (!activeConversationPromptKey) {
@@ -471,6 +573,72 @@ export function WorkbenchClient() {
     } finally {
       setPromptOptimizing(false);
     }
+  }
+
+  async function createAiImagePaymentOrder(): Promise<void> {
+    setBuyBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const payload = await apiJson<AiImagePaymentResponse>("/api/billing/ai-image", {
+        method: "POST",
+        body: JSON.stringify({ unitCount: buyUnitCount }),
+      });
+      setBuyOrder(payload.order);
+      setBuyOrderPaid(false);
+      setMessage("支付后额度会自动到账，可稍后刷新剩余额度。");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "创建支付订单失败");
+    } finally {
+      setBuyBusy(false);
+    }
+  }
+
+  async function exchangeActivationCode(): Promise<void> {
+    const code = activationCode.trim().toUpperCase();
+    const showExchangeError = (caught: unknown) => {
+      setMessage("");
+      setError(caught instanceof Error ? caught.message : "激活码兑换失败");
+    };
+    if (!code) {
+      setError("请输入激活码");
+      return;
+    }
+    setActivationBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const payload = await apiJson<AiImageQuotaResponse>("/api/billing/ai-image", {
+        method: "POST",
+        body: JSON.stringify({ code }),
+      });
+      setAiQuota(payload.quota);
+      window.dispatchEvent(new Event(quotaRefreshEventName));
+      setActivationCode("");
+      setMessage(payload.message ?? "激活码兑换成功，额度已刷新。");
+    } catch (caught) {
+      showExchangeError(caught);
+    } finally {
+      setActivationBusy(false);
+    }
+  }
+
+  function openBuyPanel(): void {
+    setBuyPanelOpen(true);
+    setActivationPanelOpen(false);
+    setBuyOrder(null);
+    setBuyOrderPaid(false);
+    setBuyUnitCount(1);
+    setError("");
+    setMessage("");
+  }
+
+  function openActivationPanel(): void {
+    setActivationPanelOpen(true);
+    setBuyPanelOpen(false);
+    setActivationCode("");
+    setError("");
+    setMessage("");
   }
 
   function isSupportedImageFile(file: File): boolean {
@@ -890,8 +1058,14 @@ export function WorkbenchClient() {
     setRetryingTaskId(task.id);
     setError("");
     setMessage("");
+    const referenceImageIds = Array.from(new Set([
+      task.referenceImageId,
+      ...task.referenceImages.map((image) => image.id),
+    ].filter((imageId): imageId is string => Boolean(imageId) && imageId !== task.sourceImageId)));
+    const retrySourceImageIds = task.sourceImageId ? [task.sourceImageId, ...referenceImageIds] : referenceImageIds;
     if (task.sourceImageId) {
       setSelectedImageId(task.sourceImageId);
+      setSourceImageIds(retrySourceImageIds);
     }
 
     try {
@@ -906,6 +1080,7 @@ export function WorkbenchClient() {
           requestedConcurrency: strategy === "low_concurrency" ? 1 : task.requestedConcurrency,
           templateId: task.templateId,
           sourceImageId: task.sourceImageId,
+          sourceImageIds: retrySourceImageIds.length > 1 ? retrySourceImageIds : undefined,
           conversationId: task.conversationId ?? activeConversationId,
           referenceStrength: task.referenceStrength,
           styleStrength: task.styleStrength,
@@ -1133,6 +1308,24 @@ export function WorkbenchClient() {
             </div>
           </div>
           <div className="panel-body form-stack">
+            <div className="ai-credit-card">
+              <div>
+                <span>AI图片生成次数</span>
+                <strong>{aiQuotaLoading ? "刷新中" : aiQuotaRemainingLabel}</strong>
+              </div>
+              <div className="ai-credit-actions">
+                <button className="button subtle mini-button" type="button" onClick={() => refreshAiQuota()} disabled={aiQuotaLoading}>
+                  刷新
+                </button>
+                <button className="button primary mini-button" type="button" onClick={openBuyPanel}>
+                  购买次数
+                </button>
+                <button className="button subtle mini-button" type="button" onClick={openActivationPanel}>
+                  激活码兑换
+                </button>
+              </div>
+            </div>
+
             <div className="mode-tabs" role="tablist" aria-label="生成模式">
               {modes.map((item) => (
                 <button
@@ -1388,6 +1581,7 @@ export function WorkbenchClient() {
 
             <div className="quota-hint">
               本次预计消耗 <strong>{estimatedQuotaCost}</strong> 次额度
+              <span> · 剩余 <strong>{aiQuotaRemainingLabel}</strong></span>
               {selectedTemplate ? <span> · {selectedTemplate.name}</span> : null}
             </div>
 
@@ -1515,6 +1709,7 @@ export function WorkbenchClient() {
                     </div>
                   </div>
                   <strong>{conversation.title}</strong>
+                  <div className="conversation-owner-line">归属用户：{conversation.userName ?? "未绑定用户"}</div>
                   <div className="queue-prompt">{task?.prompt ?? "新的图片会话"}</div>
                   <small>{formatDateTime(conversation.updatedAt)}</small>
                   {task?.errorMessage ? <small className="toast-line error">{compactErrorMessage(task.errorMessage)}</small> : null}
@@ -1529,6 +1724,100 @@ export function WorkbenchClient() {
           </div>
         </aside>
       </section>
+
+      {buyPanelOpen ? (
+        <div className="admin-modal-backdrop" role="dialog" aria-modal="true" aria-label="购买AI图片生成次数">
+          <div className="admin-modal ai-credit-modal">
+            <div className="ai-credit-modal-header">
+              <div>
+                <h2>购买AI图片生成次数</h2>
+                <p>每 1 元购买 10 次生成额度，支付成功后自动刷新剩余额度。</p>
+              </div>
+              <button className="icon-button ghost" type="button" onClick={() => setBuyPanelOpen(false)} aria-label="关闭">
+                <X size={16} aria-hidden="true" />
+              </button>
+            </div>
+            <div className="ai-credit-modal-body">
+              <label className="field">
+                <span>购买份数</span>
+                <input
+                  className="input"
+                  type="number"
+                  min={1}
+                  value={buyUnitCount}
+                  onChange={(event) => setBuyUnitCount(Math.max(Number.parseInt(event.target.value, 10) || 1, 1))}
+                />
+              </label>
+              <div className="ai-credit-order-summary">
+                <span>{buyUnitCount} 份 = {buyUnitCount * 10} 次生成额度</span>
+                <strong>￥{buyUnitCount.toFixed(2)}</strong>
+              </div>
+              <button className="button primary" type="button" onClick={createAiImagePaymentOrder} disabled={buyBusy}>
+                <QrCode size={16} aria-hidden="true" />
+                {buyBusy ? "创建订单中" : "下单并生成支付二维码"}
+              </button>
+              {buyOrder ? (
+                <div className="ai-credit-qr">
+                  <img src={`https://www.laolinyun.cn/api/qrcode.php?url=${encodeURIComponent(buyOrder.qrCodeUrl)}`} alt="AI图片生成次数银联支付二维码" />
+                  <div>
+                    <strong>订单 {buyOrder.orderId}</strong>
+                    <span>{buyOrderPaid ? "已支付，额度已刷新" : `支付 ￥${(buyOrder.totalPriceFen / 100).toFixed(2)}，到账 ${buyOrder.generationCount} 次`}</span>
+                    {buyOrderPaid ? (
+                      <div className="ai-credit-payment-success">
+                        <Check size={16} aria-hidden="true" />
+                        支付成功，3 秒后自动关闭弹窗
+                      </div>
+                    ) : null}
+                    {!buyOrderPaid ? <span>正在监听支付结果，支付完成后自动刷新额度。</span> : null}
+                    <button className="button subtle mini-button" type="button" onClick={() => refreshAiQuota()} disabled={aiQuotaLoading}>
+                      我已支付，刷新额度
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+              <div className={clsx("toast-line", error && "error")}>{error || message}</div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {activationPanelOpen ? (
+        <div className="admin-modal-backdrop" role="dialog" aria-modal="true" aria-label="激活码兑换">
+          <div className="admin-modal ai-credit-modal">
+            <div className="ai-credit-modal-header">
+              <div>
+                <h2>激活码兑换</h2>
+                <p>输入激活码并点击兑换按钮，兑换成功后自动刷新额度。</p>
+              </div>
+              <button className="icon-button ghost" type="button" onClick={() => setActivationPanelOpen(false)} aria-label="关闭">
+                <X size={16} aria-hidden="true" />
+              </button>
+            </div>
+            <div className="ai-credit-modal-body">
+              <div className="ai-credit-exchange">
+                <div className="ai-credit-exchange-row">
+                  <input
+                    className="input"
+                    value={activationCode}
+                    onChange={(event) => setActivationCode(event.target.value.toUpperCase())}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        void exchangeActivationCode();
+                      }
+                    }}
+                    placeholder="XXXXX-XXXXX-XXXXX-XXXXX-XXXXX"
+                  />
+                  <button className="button subtle" type="button" onClick={exchangeActivationCode} disabled={activationBusy}>
+                    {activationBusy ? "兑换中" : "兑换"}
+                  </button>
+                </div>
+              </div>
+              <div className={clsx("toast-line", error && "error")}>{error || message}</div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }

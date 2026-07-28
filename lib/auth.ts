@@ -133,6 +133,7 @@ export function toCurrentUser(user: UserRow): CurrentUser {
   return {
     id: publicUser.id,
     email: publicUser.email,
+    externalId: publicUser.externalId,
     name: publicUser.name,
     role: publicUser.role,
     groupId: publicUser.groupId,

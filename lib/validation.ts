@@ -219,14 +219,12 @@ export const optimizePromptSchema = z.object({
   variables: z.record(z.string().trim().max(80), z.string().trim().max(1000)).default({}),
 });
 
-export const registerSchema = z.object({
-  email: z.string().trim().email("邮箱格式不正确").max(160).transform((value) => value.toLowerCase()),
-  name: z.string().trim().min(1, "名称不能为空").max(60),
-  password: z.string().min(8, "密码至少 8 位").max(200),
+export const qrLoginStatusSchema = z.object({
+  webCode: z.string().trim().min(1, "二维码标识不能为空").max(120),
 });
 
 export const loginSchema = z.object({
-  email: z.string().trim().email("邮箱格式不正确").max(160).transform((value) => value.toLowerCase()),
+  name: z.string().trim().min(1, "请输入账号或手机号").max(160),
   password: z.string().min(1, "请输入密码").max(200),
 });
 

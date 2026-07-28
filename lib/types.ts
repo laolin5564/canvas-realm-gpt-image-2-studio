@@ -179,6 +179,7 @@ export interface UserGroupRow {
 export interface UserRow {
   id: string;
   email: string;
+  external_id: string | null;
   name: string;
   password_hash: string;
   role: UserRole;
@@ -318,6 +319,8 @@ export interface PublicConversationMessage {
 export interface PublicConversation {
   id: string;
   userId: string | null;
+  userName: string | null;
+  userEmail: string | null;
   title: string;
   fixedPromptEnabled: boolean;
   fixedPrompt: string | null;
@@ -343,6 +346,7 @@ export interface PublicUserGroup {
 export interface PublicUser {
   id: string;
   email: string;
+  externalId: string | null;
   name: string;
   role: UserRole;
   status: UserStatus;
@@ -373,6 +377,7 @@ export interface AdminUserPagination {
 export interface CurrentUser {
   id: string;
   email: string;
+  externalId: string | null;
   name: string;
   role: UserRole;
   groupId: string | null;

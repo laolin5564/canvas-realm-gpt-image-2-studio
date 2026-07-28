@@ -42,6 +42,8 @@ const navItems = [
   { href: "/admin", label: "管理员后台", icon: BarChart3 },
 ];
 
+const quotaRefreshEventName = "aiimage:quota-updated";
+
 export function AppShell({
   children,
   initialSiteSettings,
@@ -57,14 +59,21 @@ export function AppShell({
   }, [siteSettings.siteTitle]);
 
   useEffect(() => {
-    apiJson<AuthResponse>("/api/auth/me")
-      .then((payload) => setUser(payload.user))
-      .catch(() => setUser(null))
-      .finally(() => setAuthLoaded(true));
+    const refreshAuth = () => {
+      apiJson<AuthResponse>("/api/auth/me")
+        .then((payload) => setUser(payload.user))
+        .catch(() => setUser(null))
+        .finally(() => setAuthLoaded(true));
+    };
+
+    refreshAuth();
+    window.addEventListener(quotaRefreshEventName, refreshAuth);
 
     apiJson<SiteSettingsResponse>("/api/site-settings")
       .then((payload) => setSiteSettings(payload.settings))
       .catch(() => undefined);
+
+    return () => window.removeEventListener(quotaRefreshEventName, refreshAuth);
   }, []);
 
   useEffect(() => {

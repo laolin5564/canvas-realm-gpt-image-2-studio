@@ -9,6 +9,7 @@ function toCurrentUser(user: UserRow): CurrentUser {
   return {
     id: user.id,
     email: user.email,
+    externalId: user.external_id,
     name: user.name,
     role: user.role,
     groupId: user.group_id,

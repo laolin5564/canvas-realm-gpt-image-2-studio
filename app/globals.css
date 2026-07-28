@@ -1922,6 +1922,33 @@ button.nav-link {
   grid-template-columns: 1fr;
 }
 
+.auth-qr-panel {
+  display: grid;
+  justify-items: center;
+  gap: 0.85rem;
+  padding: 0.35rem 0 0.15rem;
+}
+
+.auth-qr-box {
+  display: grid;
+  place-items: center;
+  width: min(13.5rem, 100%);
+  aspect-ratio: 1;
+  border: 1px solid rgba(205, 215, 208, 0.95);
+  border-radius: 1rem;
+  background: linear-gradient(145deg, #ffffff, #eef5ef);
+  color: var(--muted);
+  box-shadow: var(--shadow-tight);
+  overflow: hidden;
+}
+
+.auth-qr-box img {
+  width: 100%;
+  height: 100%;
+  padding: 0.85rem;
+  object-fit: contain;
+}
+
 .switch-row {
   display: flex;
   align-items: center;
@@ -2780,6 +2807,144 @@ button.nav-link {
   border-radius: 0.78rem;
 }
 
+.ai-credit-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.85rem;
+  border: 1px solid rgba(205, 215, 208, 0.95);
+  border-radius: 0.9rem;
+  background: linear-gradient(135deg, rgba(248, 250, 246, 0.95), rgba(231, 243, 239, 0.9));
+}
+
+.ai-credit-card > div:first-child {
+  display: grid;
+  gap: 0.18rem;
+}
+
+.ai-credit-card span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 760;
+}
+
+.ai-credit-card strong {
+  color: var(--ink);
+  font-size: 1.18rem;
+}
+
+.ai-credit-actions {
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.ai-credit-modal {
+  max-width: 28rem;
+}
+
+.ai-credit-modal-header,
+.ai-credit-modal-body,
+.ai-credit-qr {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.ai-credit-modal-header {
+  grid-template-columns: 1fr auto;
+  align-items: start;
+  padding: 1rem 1rem 0.5rem;
+}
+
+.ai-credit-modal-header h2,
+.ai-credit-modal-header p {
+  margin: 0;
+}
+
+.ai-credit-modal-header p {
+  margin-top: 0.35rem;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.ai-credit-modal-body {
+  padding: 0.5rem 1rem 1rem;
+}
+
+.ai-credit-order-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.8rem;
+  border-radius: 0.8rem;
+  background: rgba(238, 242, 239, 0.8);
+}
+
+.ai-credit-order-summary span,
+.ai-credit-qr span {
+  color: var(--muted);
+}
+
+.ai-credit-qr {
+  justify-items: center;
+  padding: 0.9rem;
+  border: 1px solid rgba(205, 215, 208, 0.8);
+  border-radius: 0.85rem;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.ai-credit-qr img {
+  width: 11rem;
+  height: 11rem;
+  border-radius: 0.5rem;
+}
+
+.ai-credit-qr div {
+  display: grid;
+  gap: 0.45rem;
+  justify-items: center;
+  text-align: center;
+}
+
+.ai-credit-payment-success {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.45rem 0.65rem;
+  border: 1px solid rgba(34, 115, 84, 0.18);
+  border-radius: 999px;
+  color: var(--success);
+  font-size: 0.84rem;
+  font-weight: 700;
+  background: rgba(227, 246, 237, 0.85);
+}
+
+.ai-credit-exchange {
+  display: grid;
+  gap: 0.7rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid rgba(205, 215, 208, 0.8);
+}
+
+.ai-credit-exchange > div:first-child {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.ai-credit-exchange span {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.ai-credit-exchange-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.55rem;
+}
+
 .upload-target {
   display: grid;
   gap: 0.65rem;
@@ -3612,6 +3777,15 @@ button.nav-link {
   overflow: hidden;
   font-size: 0.92rem;
   line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-owner-line {
+  overflow: hidden;
+  color: var(--muted-strong);
+  font-size: 0.76rem;
+  font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

@@ -125,6 +125,7 @@ export interface CreateUserInput {
   role: UserRole;
   groupId: string | null;
   monthlyQuota: number | null;
+  externalId?: string | null;
 }
 
 export interface UpdateUserInput {
@@ -152,11 +153,34 @@ export interface ListUsersResult {
   summary: AdminUserListSummary;
 }
 
+export interface UpsertExternalUserInput {
+  externalId: string;
+  displayName?: string | null;
+}
+
 export type UserGroupWithStats = UserGroupRow & {
   member_count?: number | null;
   active_member_count?: number | null;
   month_used?: number | null;
 };
+
+export interface LocalAiImageQuota {
+  open: boolean;
+  remaining: number | null;
+  expireTime: string | null;
+  monthlyQuota: number | null;
+  monthUsed: number;
+}
+
+export interface AiCreditOrderRow {
+  order_id: string;
+  user_id: string;
+  credit_count: number;
+  total_price_fen: number;
+  status: "pending" | "paid";
+  created_at: string;
+  paid_at: string | null;
+}
 
 type AppSettingKey =
   | "image_provider"
@@ -594,6 +618,7 @@ function initializeSchema(database: DatabaseSync): void {
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       email TEXT NOT NULL UNIQUE,
+      external_id TEXT UNIQUE,
       name TEXT NOT NULL,
       password_hash TEXT NOT NULL,
       role TEXT NOT NULL CHECK (role IN ('admin', 'member')),
@@ -619,6 +644,30 @@ function initializeSchema(database: DatabaseSync): void {
 
     CREATE INDEX IF NOT EXISTS idx_sessions_token
       ON sessions (token_hash);
+
+    CREATE TABLE IF NOT EXISTS ai_credit_orders (
+      order_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      credit_count INTEGER NOT NULL,
+      total_price_fen INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'paid')),
+      created_at TEXT NOT NULL,
+      paid_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_ai_credit_orders_user
+      ON ai_credit_orders (user_id, created_at);
+
+    CREATE TABLE IF NOT EXISTS ai_credit_events (
+      event_key TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      credit_count INTEGER NOT NULL,
+      source TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_ai_credit_events_user
+      ON ai_credit_events (user_id, created_at);
 
     CREATE TABLE IF NOT EXISTS openai_oauth_accounts (
       id TEXT PRIMARY KEY,
@@ -672,6 +721,7 @@ function initializeSchema(database: DatabaseSync): void {
   ensureColumn(database, "conversations", "fixed_prompt", "TEXT");
   ensureColumn(database, "users", "status", "TEXT NOT NULL DEFAULT 'active'");
   ensureColumn(database, "users", "monthly_quota", "INTEGER");
+  ensureColumn(database, "users", "external_id", "TEXT");
   database.exec(`
     CREATE INDEX IF NOT EXISTS idx_generation_tasks_user
       ON generation_tasks (user_id, created_at);
@@ -684,6 +734,10 @@ function initializeSchema(database: DatabaseSync): void {
 
     CREATE INDEX IF NOT EXISTS idx_users_status
       ON users (status, created_at);
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_users_external_id
+      ON users (external_id)
+      WHERE external_id IS NOT NULL;
 
     CREATE INDEX IF NOT EXISTS idx_canvas_projects_user
       ON canvas_projects (user_id);
@@ -714,6 +768,10 @@ function seedDefaultGroups(database: DatabaseSync): void {
 export function countUsers(): number {
   const row = castRow<{ count: number }>(getDb().prepare("SELECT COUNT(*) AS count FROM users").get());
   return row?.count ?? 0;
+}
+
+function nextUserRoleForLocalCreate(): UserRole {
+  return countUsers() === 0 ? "admin" : "member";
 }
 
 export function getDefaultGroup(): UserGroupRow {
@@ -807,13 +865,14 @@ export function createUser(input: CreateUserInput): UserRow {
     .prepare(
       `
       INSERT INTO users (
-        id, email, name, password_hash, role, status, group_id, monthly_quota, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        id, email, external_id, name, password_hash, role, status, group_id, monthly_quota, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
     )
     .run(
       id,
       input.email.toLowerCase(),
+      input.externalId ?? null,
       input.name,
       input.passwordHash,
       input.role,
@@ -839,6 +898,57 @@ export function getUserByEmail(email: string): UserRow | null {
   return castRow<UserRow>(
     getDb().prepare("SELECT * FROM users WHERE email = ? LIMIT 1").get(email.toLowerCase()),
   );
+}
+
+export function getUserByExternalId(externalId: string): UserRow | null {
+  return castRow<UserRow>(
+    getDb().prepare("SELECT * FROM users WHERE external_id = ? LIMIT 1").get(externalId),
+  );
+}
+
+export function upsertExternalUser(input: UpsertExternalUserInput): UserRow {
+  const externalId = input.externalId.trim();
+  if (!externalId) {
+    throw new Error("外部用户标识不能为空");
+  }
+
+  const existing = getUserByExternalId(externalId);
+  if (existing) {
+    const nextName = input.displayName?.trim() || existing.name;
+    getDb()
+      .prepare("UPDATE users SET name = ?, updated_at = ? WHERE id = ?")
+      .run(nextName, nowIso(), existing.id);
+
+    const updated = getUserById(existing.id);
+    if (!updated) {
+      throw new Error("用户更新失败");
+    }
+    return updated;
+  }
+
+  const fallbackEmail = `${externalId}@laolinyun.local`.toLowerCase();
+  const legacyUser = getUserByEmail(fallbackEmail);
+  if (legacyUser) {
+    getDb()
+      .prepare("UPDATE users SET external_id = ?, name = ?, updated_at = ? WHERE id = ?")
+      .run(externalId, input.displayName?.trim() || legacyUser.name, nowIso(), legacyUser.id);
+
+    const updated = getUserById(legacyUser.id);
+    if (!updated) {
+      throw new Error("用户更新失败");
+    }
+    return updated;
+  }
+
+  return createUser({
+    email: fallbackEmail,
+    name: input.displayName?.trim() || externalId,
+    passwordHash: "external:laolinyun",
+    role: nextUserRoleForLocalCreate(),
+    groupId: getRegistrationSettings().registrationDefaultGroupId || getDefaultGroup().id,
+    monthlyQuota: null,
+    externalId,
+  });
 }
 
 export function listUsers(): UserRow[] {
@@ -1072,6 +1182,213 @@ export function getUserQuota(userId: string): { monthlyQuota: number | null; mon
     monthlyQuota: user.monthly_quota ?? group?.monthly_quota ?? null,
     monthUsed: getUserMonthImageUsage(userId),
   };
+}
+
+export function getLocalAiImageQuota(userId: string): LocalAiImageQuota {
+  const usage = getUserQuota(userId);
+  const remaining = usage.monthlyQuota === null ? null : Math.max(usage.monthlyQuota - usage.monthUsed, 0);
+  return {
+    open: remaining === null || remaining > 0,
+    remaining,
+    expireTime: null,
+    monthlyQuota: usage.monthlyQuota,
+    monthUsed: usage.monthUsed,
+  };
+}
+
+export function grantUserAiImageCredits(userId: string, creditCount: number): LocalAiImageQuota {
+  const count = normalizeCreditCount(creditCount);
+  if (count <= 0) {
+    return getLocalAiImageQuota(userId);
+  }
+  const user = getUserById(userId);
+  if (!user) {
+    throw new Error("用户不存在");
+  }
+
+  const usage = getUserQuota(userId);
+  const nextQuota = (usage.monthlyQuota ?? 0) + count;
+  getDb()
+    .prepare("UPDATE users SET monthly_quota = ?, updated_at = ? WHERE id = ?")
+    .run(nextQuota, nowIso(), userId);
+  return getLocalAiImageQuota(userId);
+}
+
+export function createAiCreditOrder(input: {
+  orderId: string;
+  userId: string;
+  creditCount: number;
+  totalPriceFen: number;
+}): AiCreditOrderRow {
+  const orderId = input.orderId.trim();
+  if (!orderId) {
+    throw new Error("订单号不能为空");
+  }
+  const creditCount = normalizeCreditCount(input.creditCount);
+  if (creditCount <= 0) {
+    throw new Error("订单额度必须大于0");
+  }
+  const now = nowIso();
+  getDb()
+    .prepare(
+      `
+      INSERT INTO ai_credit_orders (order_id, user_id, credit_count, total_price_fen, status, created_at, paid_at)
+      VALUES (?, ?, ?, ?, 'pending', ?, NULL)
+      ON CONFLICT(order_id) DO NOTHING
+    `,
+    )
+    .run(orderId, input.userId, creditCount, Math.max(Math.trunc(input.totalPriceFen), 0), now);
+
+  const order = getAiCreditOrder(orderId);
+  if (!order) {
+    throw new Error("订单记录创建失败");
+  }
+  return order;
+}
+
+export function getAiCreditOrder(orderId: string): AiCreditOrderRow | null {
+  return castRow<AiCreditOrderRow>(
+    getDb().prepare("SELECT * FROM ai_credit_orders WHERE order_id = ? LIMIT 1").get(orderId.trim()),
+  );
+}
+
+export function markAiCreditOrderPaidAndGrant(orderId: string, userId: string): { quota: LocalAiImageQuota; granted: boolean } {
+  const database = getDb();
+  const normalizedOrderId = orderId.trim();
+  if (!normalizedOrderId) {
+    throw new Error("订单号不能为空");
+  }
+
+  try {
+    database.exec("BEGIN IMMEDIATE");
+    const order = castRow<AiCreditOrderRow>(
+      database.prepare("SELECT * FROM ai_credit_orders WHERE order_id = ? LIMIT 1").get(normalizedOrderId),
+    );
+    if (!order) {
+      throw new Error("本地订单记录不存在，请重新创建订单");
+    }
+    if (order.user_id !== userId) {
+      throw new Error("订单不属于当前账号");
+    }
+
+    let granted = false;
+    if (order.status !== "paid") {
+      const usage = getUserQuota(userId);
+      const nextQuota = (usage.monthlyQuota ?? 0) + normalizeCreditCount(order.credit_count);
+      const paidAt = nowIso();
+      database.prepare("UPDATE users SET monthly_quota = ?, updated_at = ? WHERE id = ?").run(nextQuota, paidAt, userId);
+      database.prepare("UPDATE ai_credit_orders SET status = 'paid', paid_at = ? WHERE order_id = ?").run(paidAt, normalizedOrderId);
+      granted = true;
+    }
+
+    database.exec("COMMIT");
+    return { quota: getLocalAiImageQuota(userId), granted };
+  } catch (error) {
+    try {
+      database.exec("ROLLBACK");
+    } catch {
+      // Ignore rollback failures when SQLite has already closed the transaction.
+    }
+    throw error;
+  }
+}
+
+export function grantAiCreditsOnce(input: {
+  eventKey: string;
+  userId: string;
+  creditCount: number;
+  source: string;
+}): { quota: LocalAiImageQuota; granted: boolean } {
+  const database = getDb();
+  const eventKey = input.eventKey.trim();
+  const creditCount = normalizeCreditCount(input.creditCount);
+  if (!eventKey || creditCount <= 0) {
+    return { quota: getLocalAiImageQuota(input.userId), granted: false };
+  }
+
+  try {
+    database.exec("BEGIN IMMEDIATE");
+    const now = nowIso();
+    const result = database
+      .prepare("INSERT OR IGNORE INTO ai_credit_events (event_key, user_id, credit_count, source, created_at) VALUES (?, ?, ?, ?, ?)")
+      .run(eventKey, input.userId, creditCount, input.source, now);
+    const granted = result.changes === 1;
+    if (granted) {
+      const usage = getUserQuota(input.userId);
+      const nextQuota = (usage.monthlyQuota ?? 0) + creditCount;
+      database.prepare("UPDATE users SET monthly_quota = ?, updated_at = ? WHERE id = ?").run(nextQuota, now, input.userId);
+    }
+    database.exec("COMMIT");
+    return { quota: getLocalAiImageQuota(input.userId), granted };
+  } catch (error) {
+    try {
+      database.exec("ROLLBACK");
+    } catch {
+      // Ignore rollback failures when SQLite has already closed the transaction.
+    }
+    throw error;
+  }
+}
+
+export function deductUserAiImageCredits(input: {
+  user: string;
+  creditCount: number;
+  source?: string;
+}): { quota: LocalAiImageQuota; deducted: boolean; creditCount: number; userId: string } {
+  const userKey = input.user.trim();
+  const creditCount = normalizeCreditCount(input.creditCount);
+  if (!userKey) {
+    throw new Error("扣减用户不能为空");
+  }
+  if (creditCount <= 0) {
+    throw new Error("扣减次数必须大于0");
+  }
+  const database = getDb();
+
+  try {
+    database.exec("BEGIN IMMEDIATE");
+    const user = castRow<UserRow>(
+      database
+        .prepare(
+          `
+          SELECT * FROM users
+          WHERE id = ? OR external_id = ? OR email = ? OR name = ?
+          ORDER BY CASE
+            WHEN id = ? THEN 0
+            WHEN external_id = ? THEN 1
+            WHEN email = ? THEN 2
+            ELSE 3
+          END
+          LIMIT 1
+        `,
+        )
+        .get(userKey, userKey, userKey.toLowerCase(), userKey, userKey, userKey, userKey.toLowerCase()),
+    );
+    if (!user) {
+      throw new Error("扣减用户不存在");
+    }
+
+    const now = nowIso();
+    const usage = getUserQuota(user.id);
+    const nextQuota = Math.max((usage.monthlyQuota ?? 0) - creditCount, 0);
+    database.prepare("UPDATE users SET monthly_quota = ?, updated_at = ? WHERE id = ?").run(nextQuota, now, user.id);
+    database
+      .prepare("INSERT INTO ai_credit_events (event_key, user_id, credit_count, source, created_at) VALUES (?, ?, ?, ?, ?)")
+      .run(createId("aicev"), user.id, -creditCount, input.source ?? "direct_deduct", now);
+    database.exec("COMMIT");
+    return { quota: getLocalAiImageQuota(user.id), deducted: true, creditCount, userId: user.id };
+  } catch (error) {
+    try {
+      database.exec("ROLLBACK");
+    } catch {
+      // Ignore rollback failures when SQLite has already closed the transaction.
+    }
+    throw error;
+  }
+}
+
+function normalizeCreditCount(value: number): number {
+  return Math.max(Math.trunc(value), 0);
 }
 
 export function getAppSetting(key: AppSettingKey): string | null {
@@ -2922,10 +3239,13 @@ export function toPublicConversation(
   const latestTask = getLatestConversationTask(row.id);
   const latestImage = getLatestConversationImage(row.id);
   const imageMap = options.messages ? getConversationImageMap(row.id) : new Map<string, GeneratedImageRow>();
+  const owner = row.user_id ? getUserById(row.user_id) : null;
 
   return {
     id: row.id,
     userId: row.user_id,
+    userName: owner?.name ?? null,
+    userEmail: owner?.email ?? null,
     title: row.title,
     fixedPromptEnabled: row.fixed_prompt_enabled === 1,
     fixedPrompt: row.fixed_prompt,
@@ -3046,6 +3366,7 @@ export function toPublicUser(row: UserRow): PublicUser {
   return {
     id: row.id,
     email: row.email,
+    externalId: row.external_id,
     name: row.name,
     role: row.role,
     status: row.status,

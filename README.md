@@ -187,6 +187,7 @@ http://服务器IP:3000
 | `WORKER_POLL_INTERVAL_MS` | `3000` | Worker 轮询间隔 |
 | `APP_BASE_URL` | 空 | 部署域名，用于部分回调和 Cookie 判断 |
 | `SESSION_COOKIE_SECURE` | `false` | HTTPS 部署建议设为 `true` |
+| `LAOLINYUN_USER_API_URL` | `https://www.laolinyun.cn/api/user.php` | 老林云登录注册接口地址 |
 | `WEB_UPDATE_ENABLED` | `false` | 是否允许后台触发 Web 一键更新 |
 | `WEB_UPDATE_REPO_DIR` | `/app` | Web 更新执行目录 |
 | `OPENAI_OAUTH_TOKEN_ENCRYPTION_KEY` | 空 | 内置 OAuth token 加密 key |

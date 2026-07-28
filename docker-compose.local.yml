@@ -1,0 +1,26 @@
+services:
+  image-gen-system:
+    build: .
+    container_name: "${CONTAINER_NAME:-image-laolinyun-ai}"
+    network_mode: host
+    environment:
+      PORT: "${APP_PORT:-3010}"
+      NODE_OPTIONS: "--dns-result-order=ipv4first"
+      SUB2API_BASE_URL: "${SUB2API_BASE_URL:-https://s2a.laolin.ai/v1}"
+      SUB2API_API_KEY: "${SUB2API_API_KEY}"
+      IMAGE_MODEL: "${IMAGE_MODEL:-gpt-image-2}"
+      IMAGE_STORAGE_DIR: "/app/data/images"
+      DATABASE_URL: "file:/app/data/app.db"
+      IMAGE_REQUEST_TIMEOUT_MS: "${IMAGE_REQUEST_TIMEOUT_MS:-300000}"
+      WORKER_POLL_INTERVAL_MS: "${WORKER_POLL_INTERVAL_MS:-3000}"
+      COST_PER_IMAGE: "${COST_PER_IMAGE:-0.04}"
+      APP_BASE_URL: "${APP_BASE_URL:-http://192.168.3.2:3010}"
+      SESSION_COOKIE_SECURE: "${SESSION_COOKIE_SECURE:-false}"
+      UPDATE_REPO: "${UPDATE_REPO:-laolin5564/canvas-realm-gpt-image-2-studio}"
+      UPDATE_CHECK_URL: "${UPDATE_CHECK_URL:-https://api.github.com/repos/laolin5564/canvas-realm-gpt-image-2-studio/releases/latest}"
+      WEB_UPDATE_ENABLED: "${WEB_UPDATE_ENABLED:-false}"
+      WEB_UPDATE_REPO_DIR: "${WEB_UPDATE_REPO_DIR:-/app}"
+      WEB_UPDATE_LOCK_FILE: "${WEB_UPDATE_LOCK_FILE:-/tmp/canvas-realm-studio-web-update.lock}"
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped

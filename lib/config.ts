@@ -83,6 +83,8 @@ export const appConfig = {
   openaiOAuthClientId: process.env.OPENAI_OAUTH_CLIENT_ID || "",
   openaiOAuthRedirectUri: process.env.OPENAI_OAUTH_REDIRECT_URI || "",
   openaiOAuthTokenEncryptionKey: process.env.OPENAI_OAUTH_TOKEN_ENCRYPTION_KEY || "",
+  laolinyunUserApiUrl: process.env.LAOLINYUN_USER_API_URL || "https://www.laolinyun.cn/api/user.php",
+  laolinyunAppstoreApiUrl: process.env.LAOLINYUN_APPSTORE_API_URL || "https://www.laolinyun.cn/api/appstore.php",
   updateCheckUrl: process.env.UPDATE_CHECK_URL || defaultUpdateCheckUrl,
   updateRepo: process.env.UPDATE_REPO || defaultUpdateRepo,
   webUpdateEnabled: readBooleanEnv("WEB_UPDATE_ENABLED"),
