@@ -122,6 +122,36 @@ export async function processQueuedTasks(maxTasks = 1): Promise<number> {
   return tasks.length;
 }
 
+// 滑动窗口调度：有空槽就立刻领取新任务开工，不等同批慢任务收尾。
+// 相比按波次 Promise.all，混合快慢任务时吞吐显著更高。
+const inFlightTasks = new Set<Promise<void>>();
+
+export function inFlightTaskCount(): number {
+  return inFlightTasks.size;
+}
+
+export function fillProcessingSlots(maxConcurrency: number): number {
+  const capacity = normalizeImageConcurrency(maxConcurrency) - inFlightTasks.size;
+  if (capacity <= 0) {
+    return 0;
+  }
+
+  const tasks = claimQueuedTasks(capacity);
+  for (const task of tasks) {
+    const running: Promise<void> = processClaimedTask(task)
+      .catch((error) => {
+        console.error(
+          `task ${task.id} processing crashed: ${error instanceof Error ? error.message : error}`,
+        );
+      })
+      .finally(() => {
+        inFlightTasks.delete(running);
+      });
+    inFlightTasks.add(running);
+  }
+  return tasks.length;
+}
+
 async function runWithTaskCancellation<T>(
   taskId: string,
   operation: (signal: AbortSignal) => Promise<T>,

@@ -6,7 +6,7 @@ import {
   requeueOrphanProcessingTasks,
 } from "../lib/db";
 import { cleanupExpiredGeneratedImages } from "../lib/image-cleanup";
-import { processQueuedTasks } from "../lib/queue";
+import { fillProcessingSlots, inFlightTaskCount } from "../lib/queue";
 
 const cleanupIntervalMs = 60 * 60 * 1000;
 const reclaimIntervalMs = 60 * 1000;
@@ -34,9 +34,11 @@ async function main(): Promise<void> {
   while (true) {
     try {
       const concurrency = getImageConcurrencySetting();
-      const processed = await processQueuedTasks(concurrency);
-      if (processed > 0) {
-        console.log(`processed ${processed} image task(s), concurrency=${concurrency}`);
+      const claimed = fillProcessingSlots(concurrency);
+      if (claimed > 0) {
+        console.log(
+          `claimed ${claimed} image task(s), in_flight=${inFlightTaskCount()}, concurrency=${concurrency}`,
+        );
       }
       if (Date.now() - lastReclaimAt > reclaimIntervalMs) {
         lastReclaimAt = Date.now();
