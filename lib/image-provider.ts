@@ -8,7 +8,7 @@ import {
   updateOpenAIOAuthAccountStatus,
   updateOpenAIOAuthAccountTokens,
 } from "./db";
-import { apiSizeForOption } from "./image-options";
+import { apiQualityForOption, apiSizeForOption } from "./image-options";
 import { fitReferenceImagesToBudget } from "./image-upload";
 import {
   decodeOpenAIIdToken,
@@ -232,6 +232,10 @@ async function requestTextToImage(
   if (apiSize) {
     body.size = apiSize;
   }
+  const apiQuality = apiQualityForOption(task.quality);
+  if (apiQuality) {
+    body.quality = apiQuality;
+  }
 
   const response = await fetch(`${settings.baseUrl}/images/generations`, {
     method: "POST",
@@ -286,6 +290,13 @@ async function requestImageEdit(
   const apiSize = apiSizeForOption(task.size);
   if (apiSize) {
     form.append("size", apiSize);
+  }
+  const apiQuality = apiQualityForOption(task.quality);
+  if (apiQuality) {
+    form.append("quality", apiQuality);
+  }
+  if (appConfig.imageEditInputFidelity) {
+    form.append("input_fidelity", appConfig.imageEditInputFidelity);
   }
 
   const response = await fetch(`${settings.baseUrl}/images/edits`, {
@@ -377,6 +388,10 @@ async function buildOpenAIOAuthResponsesBody(
   const apiSize = apiSizeForOption(task.size);
   if (apiSize) {
     tool.size = apiSize;
+  }
+  const apiQuality = apiQualityForOption(task.quality);
+  if (apiQuality) {
+    tool.quality = apiQuality;
   }
 
   return {

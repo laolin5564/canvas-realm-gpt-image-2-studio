@@ -5,7 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { appConfig, PUBLIC_FILE_PREFIX } from "./config";
 import { composeConversationPrompt, normalizeConversationFixedPrompt } from "./conversation-prompt";
 import { normalizeImageConcurrency } from "./concurrency";
-import { normalizeImageSizeOption } from "./image-options";
+import { apiQualityForOption, normalizeImageSizeOption } from "./image-options";
 import { normalizeProxyUrl, redactProxyUrl } from "./proxy";
 import type {
   AdminStats,
@@ -57,6 +57,7 @@ export interface CreateTaskInput {
   prompt: string;
   negativePrompt: string | null;
   size: string;
+  quality?: string | null;
   quantity: number;
   requestedConcurrency?: number | null;
   templateId: string | null;
@@ -711,6 +712,7 @@ function initializeSchema(database: DatabaseSync): void {
   ensureColumn(database, "generation_tasks", "fixed_prompt", "TEXT");
   ensureColumn(database, "generation_tasks", "prompt_suffix", "TEXT");
   ensureColumn(database, "generation_tasks", "requested_concurrency", "INTEGER");
+  ensureColumn(database, "generation_tasks", "quality", "TEXT");
   ensureColumn(database, "generation_tasks", "reference_image_id", "TEXT");
   ensureColumn(database, "generation_tasks", "reference_image_ids", "TEXT");
   ensureColumn(database, "templates", "owner_user_id", "TEXT");
@@ -2231,10 +2233,10 @@ export function createGenerationTask(input: CreateTaskInput): GenerationTaskRow 
         `
         INSERT INTO generation_tasks (
           id, user_id, conversation_id, mode, status, progress_stage, prompt, fixed_prompt, prompt_suffix,
-          negative_prompt, size, quantity, requested_concurrency, template_id,
+          negative_prompt, size, quality, quantity, requested_concurrency, template_id,
           source_image_id, reference_image_id, reference_image_ids, reference_strength, style_strength, cost_estimate,
           error_message, created_at, started_at, completed_at
-        ) VALUES (?, ?, ?, ?, 'queued', 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL)
+        ) VALUES (?, ?, ?, ?, 'queued', 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL)
       `,
       )
       .run(
@@ -2247,6 +2249,7 @@ export function createGenerationTask(input: CreateTaskInput): GenerationTaskRow 
         composedPrompt.promptSuffix,
         input.negativePrompt,
         input.size,
+        apiQualityForOption(input.quality),
         input.quantity,
         input.requestedConcurrency ?? null,
         input.templateId,

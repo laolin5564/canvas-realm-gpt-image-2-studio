@@ -26,8 +26,15 @@ import {
   X,
 } from "lucide-react";
 import clsx from "clsx";
-import { imageSizeLabels, normalizeImageSizeOption, sizeFromDimensions, sizeOptions } from "@/lib/image-options";
-import type { ImageSizeOption } from "@/lib/image-options";
+import {
+  imageQualityLabels,
+  imageQualityOptions,
+  imageSizeLabels,
+  normalizeImageSizeOption,
+  sizeFromDimensions,
+  sizeOptions,
+} from "@/lib/image-options";
+import type { ImageQualityOption, ImageSizeOption } from "@/lib/image-options";
 import type {
   GenerationMode,
   PublicConversation,
@@ -305,6 +312,7 @@ export function WorkbenchClient() {
   const [prompt, setPrompt] = useState(defaultPromptByMode.text_to_image);
   const [negativePrompt, setNegativePrompt] = useState("低清晰度，模糊，变形，多余文字");
   const [size, setSize] = useState<ImageSizeOption>("auto");
+  const [quality, setQuality] = useState<ImageQualityOption>("auto");
   const [quantity, setQuantity] = useState<(typeof quantityOptions)[number]>(1);
   const [templateId, setTemplateId] = useState("");
   const [templateVariableValues, setTemplateVariableValues] = useState<TemplateVariableValues>({});
@@ -942,6 +950,7 @@ export function WorkbenchClient() {
           prompt,
           negativePrompt,
           size,
+          quality,
           quantity,
           templateId: templateId || null,
           sourceImageId: resolvedSourceImageId,
@@ -1218,6 +1227,7 @@ export function WorkbenchClient() {
           referenceImageId: referenceIds[0] ?? null,
           referenceImageIds: referenceIds.length > 0 ? referenceIds : undefined,
           size,
+          quality,
           quantity: 1,
           referenceStrength,
           styleStrength,
@@ -1509,6 +1519,21 @@ export function WorkbenchClient() {
                   {sizeOptions.map((item) => (
                     <option key={item} value={item}>
                       {imageSizeLabels[item]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="field">
+                <label htmlFor="quality">质量</label>
+                <select
+                  id="quality"
+                  className="select"
+                  value={quality}
+                  onChange={(event) => setQuality(event.target.value as ImageQualityOption)}
+                >
+                  {imageQualityOptions.map((item) => (
+                    <option key={item} value={item}>
+                      {imageQualityLabels[item]}
                     </option>
                   ))}
                 </select>

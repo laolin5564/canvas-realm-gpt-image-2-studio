@@ -78,6 +78,7 @@ export async function POST(
       prompt: input.prompt,
       negativePrompt: input.negativePrompt,
       size: input.size,
+      quality: input.quality,
       quantity: input.quantity,
       templateId: generatedSourceImage?.template_id ?? latestImage?.template_id ?? null,
       sourceImageId,

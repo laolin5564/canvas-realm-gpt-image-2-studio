@@ -9,8 +9,33 @@ export const sizeOptions = [
   "wechat_cover_235_1",
   "banner_16_9",
   "poster_2_3",
+  "hd_2k_1_1",
+  "hd_4k_16_9",
+  "hd_4k_9_16",
 ] as const;
 export type ImageSizeOption = (typeof sizeOptions)[number];
+
+export const imageQualityOptions = ["auto", "low", "medium", "high"] as const;
+export type ImageQualityOption = (typeof imageQualityOptions)[number];
+
+export const imageQualityLabels: Record<ImageQualityOption, string> = {
+  auto: "默认",
+  low: "低（更快）",
+  medium: "中",
+  high: "高（更慢）",
+};
+
+export function normalizeImageQualityOption(value: string | null | undefined): ImageQualityOption {
+  if (value && imageQualityOptions.includes(value as ImageQualityOption)) {
+    return value as ImageQualityOption;
+  }
+  return "auto";
+}
+
+export function apiQualityForOption(value: string | null | undefined): string | null {
+  const normalized = normalizeImageQualityOption(value);
+  return normalized === "auto" ? null : normalized;
+}
 
 export const imageSizeLabels: Record<ImageSizeOption, string> = {
   auto: "不限制",
@@ -23,6 +48,9 @@ export const imageSizeLabels: Record<ImageSizeOption, string> = {
   wechat_cover_235_1: "公众号封面 2.35:1",
   banner_16_9: "横幅 16:9",
   poster_2_3: "海报 2:3",
+  hd_2k_1_1: "高清 2K 1:1（实验）",
+  hd_4k_16_9: "超清 4K 16:9（实验）",
+  hd_4k_9_16: "超清 4K 9:16（实验）",
 };
 
 const imageSizeApiMap: Record<ImageSizeOption, string | null> = {
@@ -36,6 +64,9 @@ const imageSizeApiMap: Record<ImageSizeOption, string | null> = {
   wechat_cover_235_1: "1536x1024",
   banner_16_9: "1536x1024",
   poster_2_3: "1024x1536",
+  hd_2k_1_1: "2048x2048",
+  hd_4k_16_9: "3840x2160",
+  hd_4k_9_16: "2160x3840",
 };
 
 const imageSizeRatioMap: Record<ImageSizeOption, { width: number; height: number }> = {
@@ -49,6 +80,9 @@ const imageSizeRatioMap: Record<ImageSizeOption, { width: number; height: number
   wechat_cover_235_1: { width: 235, height: 100 },
   banner_16_9: { width: 16, height: 9 },
   poster_2_3: { width: 2, height: 3 },
+  hd_2k_1_1: { width: 1, height: 1 },
+  hd_4k_16_9: { width: 16, height: 9 },
+  hd_4k_9_16: { width: 9, height: 16 },
 };
 
 export function isImageSizeOption(value: string): value is ImageSizeOption {

@@ -84,6 +84,7 @@ export interface GenerationTaskRow {
   prompt_suffix: string | null;
   negative_prompt: string | null;
   size: string;
+  quality: string | null;
   quantity: number;
   requested_concurrency: number | null;
   template_id: string | null;
