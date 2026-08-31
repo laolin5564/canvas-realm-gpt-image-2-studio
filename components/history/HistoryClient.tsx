@@ -276,7 +276,7 @@ export function HistoryClient({ embedded = false }: { embedded?: boolean } = {})
                 />
               </label>
               <div className={clsx("image-frame", image.height > image.width && "tall", image.width > image.height && "wide")}>
-                <img src={image.url} alt={image.prompt} />
+                <img src={image.thumbnailUrl ?? image.url} alt={image.prompt} />
               </div>
               <div className="image-card-body">
                 <div>

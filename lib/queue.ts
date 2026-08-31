@@ -7,6 +7,7 @@ import {
   isTaskStopped,
   markTaskFailed,
   markTaskSucceeded,
+  recordImageGenerationSuccess,
   recordImageTimeoutFailure,
   resetImageTimeoutStreak,
   updateTaskProgressStage,
@@ -28,6 +29,9 @@ export async function processNextQueuedTask(): Promise<boolean> {
 }
 
 async function processClaimedTask(task: GenerationTaskRow): Promise<void> {
+  const { width, height } = parseSize(task.size);
+  let savedCount = 0;
+
   try {
     let extraRefIds: string[] = [];
     try {
@@ -44,20 +48,13 @@ async function processClaimedTask(task: GenerationTaskRow): Promise<void> {
       .map((id) => getImageFilePathById(id))
       .filter((filePath): filePath is string => Boolean(filePath));
     updateTaskProgressStage(task.id, "generating");
-    const generated = await runWithTaskCancellation(task.id, (signal) =>
-      callImageModel(task, sourceImagePaths, signal),
-    );
-    const current = getGenerationTask(task.id);
-    if (!current || current.status !== "processing") {
-      return;
-    }
-    updateTaskProgressStage(task.id, "saving");
-    const { width, height } = parseSize(task.size);
 
-    for (const item of generated) {
+    // 每张图片生成完立即落盘入库，让用户在多图任务中尽早看到已完成的部分。
+    const saveImage = async (item: { bytes: Uint8Array; mimeType: string | null }): Promise<void> => {
       const latest = getGenerationTask(task.id);
       if (!latest || latest.status !== "processing") {
-        return;
+        // AbortError 语义：让 image-provider 直接终止，而不是当渠道故障去 failover 重试。
+        throw new DOMException("任务已停止", "AbortError");
       }
 
       const imageId = createId("img");
@@ -78,12 +75,31 @@ async function processClaimedTask(task: GenerationTaskRow): Promise<void> {
         mode: task.mode,
         templateId: task.template_id,
       });
+      savedCount += 1;
+    };
+
+    await runWithTaskCancellation(task.id, (signal) =>
+      callImageModel(task, sourceImagePaths, signal, saveImage),
+    );
+    const current = getGenerationTask(task.id);
+    if (!current || current.status !== "processing") {
+      return;
     }
 
-    markTaskSucceeded(task.id, generated.length);
-    resetImageTimeoutStreak();
+    markTaskSucceeded(task.id, savedCount);
+    recordImageGenerationSuccess();
   } catch (error) {
     if (isTaskStopped(task.id)) {
+      return;
+    }
+    if (savedCount > 0) {
+      // 部分图片已生成成功：保留成果按成功收尾，而不是让整单作废。
+      const current = getGenerationTask(task.id);
+      if (current && current.status === "processing") {
+        markTaskSucceeded(task.id, savedCount);
+        recordImageGenerationSuccess();
+        return;
+      }
       return;
     }
     let message = error instanceof Error ? error.message : "生成任务处理失败";

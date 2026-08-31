@@ -194,6 +194,8 @@ type AppSettingKey =
   | "image_concurrency"
   | "image_timeout_streak"
   | "image_auto_degraded_at"
+  | "image_concurrency_before_degrade"
+  | "image_success_streak"
   | "image_retention_days"
   | "site_title"
   | "site_subtitle"
@@ -1813,14 +1815,63 @@ export function recordImageTimeoutFailure(): {
   const timeoutStreak = getImageTimeoutStreak() + 1;
   const previousConcurrency = getImageConcurrencySetting();
   setAppSetting("image_timeout_streak", String(timeoutStreak));
+  setAppSetting("image_success_streak", "0");
 
   if (timeoutStreak >= 2 && previousConcurrency > 1) {
     setAppSetting("image_concurrency", "1");
     setAppSetting("image_auto_degraded_at", nowIso());
+    setAppSetting("image_concurrency_before_degrade", String(previousConcurrency));
     return { timeoutStreak, degraded: true, previousConcurrency };
   }
 
   return { timeoutStreak, degraded: false, previousConcurrency };
+}
+
+const imageConcurrencyRecoverySuccessThreshold = 3;
+
+export function recordImageGenerationSuccess(): {
+  recovered: boolean;
+  restoredConcurrency: number | null;
+} {
+  resetImageTimeoutStreak();
+
+  const degradedAt = getAppSetting("image_auto_degraded_at");
+  const storedBefore = Number(getAppSetting("image_concurrency_before_degrade") ?? 0);
+  if (!degradedAt || !Number.isFinite(storedBefore) || storedBefore <= 1) {
+    return { recovered: false, restoredConcurrency: null };
+  }
+
+  const successStreak = Number(getAppSetting("image_success_streak") ?? 0) + 1;
+  if (successStreak < imageConcurrencyRecoverySuccessThreshold) {
+    setAppSetting("image_success_streak", String(successStreak));
+    return { recovered: false, restoredConcurrency: null };
+  }
+
+  const restored = normalizeImageConcurrency(storedBefore);
+  setAppSetting("image_concurrency", String(restored));
+  setAppSetting("image_auto_degraded_at", "");
+  setAppSetting("image_concurrency_before_degrade", "");
+  setAppSetting("image_success_streak", "0");
+  return { recovered: true, restoredConcurrency: restored };
+}
+
+export function requeueOrphanProcessingTasks(): number {
+  const result = getDb()
+    .prepare(
+      "UPDATE generation_tasks SET status = 'queued', progress_stage = 'queued', started_at = NULL, error_message = NULL WHERE status = 'processing'",
+    )
+    .run();
+  return Number(result.changes);
+}
+
+export function reclaimStaleProcessingTasks(maxAgeMinutes: number): number {
+  const cutoff = new Date(Date.now() - maxAgeMinutes * 60_000).toISOString();
+  const result = getDb()
+    .prepare(
+      "UPDATE generation_tasks SET status = 'failed', progress_stage = 'failed', completed_at = ?, error_message = ? WHERE status = 'processing' AND started_at IS NOT NULL AND started_at < ?",
+    )
+    .run(nowIso(), `生成超过 ${maxAgeMinutes} 分钟未完成，系统已自动回收，请重新提交`, cutoff);
+  return Number(result.changes);
 }
 
 export function getPublicSiteSettings(): {
@@ -3316,6 +3367,7 @@ export function toPublicImage(
     userName: row.user_name ?? null,
     userEmail: row.user_email ?? null,
     url: imagePublicUrl(row.file_path),
+    thumbnailUrl: `${imagePublicUrl(row.file_path)}?thumb=1`,
     width: row.width,
     height: row.height,
     prompt: row.prompt,

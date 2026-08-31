@@ -3,7 +3,7 @@ import { requireUser } from "@/lib/auth";
 import { getGeneratedImageByFilePath, getSourceImageByFilePath } from "@/lib/db";
 import { handleRouteError, jsonError } from "@/lib/http";
 import { assertGeneratedImageAccess, assertSourceImageAccess } from "@/lib/permissions";
-import { readStorageFile } from "@/lib/storage";
+import { readStorageFile, thumbnailPathFor } from "@/lib/storage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,7 +26,10 @@ export async function GET(
       return jsonError("图片不存在", 404);
     }
 
-    const file = await readStorageFile(relativePath);
+    const wantsThumbnail = request.nextUrl.searchParams.get("thumb") === "1";
+    const file = wantsThumbnail
+      ? await readStorageFile(thumbnailPathFor(relativePath)).catch(() => readStorageFile(relativePath))
+      : await readStorageFile(relativePath);
     const body = file.bytes.buffer.slice(
       file.bytes.byteOffset,
       file.bytes.byteOffset + file.bytes.byteLength,

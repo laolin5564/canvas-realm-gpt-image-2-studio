@@ -75,6 +75,22 @@ export function datedPathParts(date = new Date()): string[] {
   ];
 }
 
+export const THUMBNAIL_SUFFIX = ".thumb.webp";
+
+export function thumbnailPathFor(relativePath: string): string {
+  return `${relativePath}${THUMBNAIL_SUFFIX}`;
+}
+
+export async function generateThumbnailFile(relativePath: string, bytes: Uint8Array): Promise<void> {
+  const { default: sharp } = await import("sharp");
+  const thumbBytes = await sharp(Buffer.from(bytes))
+    .rotate()
+    .resize({ width: 512, height: 512, fit: "inside", withoutEnlargement: true })
+    .webp({ quality: 75 })
+    .toBuffer();
+  await writeStorageFile(thumbnailPathFor(relativePath), new Uint8Array(thumbBytes));
+}
+
 export async function saveGeneratedImageFile(input: {
   taskId: string;
   imageId: string;
@@ -88,6 +104,11 @@ export async function saveGeneratedImageFile(input: {
     `${input.imageId}.${extension}`,
   );
   await writeStorageFile(relativePath, input.bytes);
+  try {
+    await generateThumbnailFile(relativePath, input.bytes);
+  } catch {
+    // 缩略图失败不影响原图落盘，列表端会自动回退加载原图。
+  }
   return relativePath;
 }
 
@@ -120,6 +141,9 @@ export async function readStorageFile(relativePath: string): Promise<{
 export async function deleteStorageFile(relativePath: string): Promise<void> {
   const absolutePath = resolveStoragePath(relativePath);
   await rm(absolutePath, { force: true });
+  if (!relativePath.endsWith(THUMBNAIL_SUFFIX)) {
+    await rm(resolveStoragePath(thumbnailPathFor(relativePath)), { force: true });
+  }
   await removeEmptyParentDirectories(path.dirname(absolutePath));
 }
 

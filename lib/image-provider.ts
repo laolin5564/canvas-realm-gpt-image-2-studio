@@ -63,13 +63,21 @@ export async function callImageModel(
   task: GenerationTaskRow,
   sourceImagePaths: string[],
   signal?: AbortSignal,
+  onImage?: (image: MaterializedImage) => Promise<void>,
 ): Promise<MaterializedImage[]> {
   const candidates = await resolveImageProviderCandidates(signal);
   let lastError: unknown = null;
+  let deliveredCount = 0;
+  const countingOnImage = onImage
+    ? async (image: MaterializedImage) => {
+        await onImage(image);
+        deliveredCount += 1;
+      }
+    : undefined;
 
   for (const settings of candidates) {
     try {
-      return await callImageModelWithSettings(task, sourceImagePaths, settings, signal);
+      return await callImageModelWithSettings(task, sourceImagePaths, settings, signal, deliveredCount, countingOnImage);
     } catch (error) {
       if (isAbortError(error) || signal?.aborted) {
         throw error;
@@ -86,12 +94,14 @@ async function callImageModelWithSettings(
   sourceImagePaths: string[],
   settings: ImageRequestSettings,
   signal?: AbortSignal,
+  alreadyDelivered = 0,
+  onImage?: (image: MaterializedImage) => Promise<void>,
 ): Promise<MaterializedImage[]> {
   const taskConcurrency = normalizeTaskImageConcurrency(task.requested_concurrency, settings.imageConcurrency);
 
   const images: MaterializedImage[] = [];
-  while (images.length < task.quantity) {
-    const remaining = task.quantity - images.length;
+  while (images.length + alreadyDelivered < task.quantity) {
+    const remaining = task.quantity - images.length - alreadyDelivered;
     const batchSize = Math.min(remaining, taskConcurrency);
     const batch = await Promise.all(
       Array.from({ length: batchSize }, async () => {
@@ -108,7 +118,11 @@ async function callImageModelWithSettings(
     }
 
     for (const item of items.slice(0, remaining)) {
-      images.push(await materializeImageItem(item, signal));
+      const image = await materializeImageItem(item, signal);
+      if (onImage) {
+        await onImage(image);
+      }
+      images.push(image);
     }
   }
   return images;

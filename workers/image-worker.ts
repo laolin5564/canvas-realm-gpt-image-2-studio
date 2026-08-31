@@ -1,9 +1,16 @@
 import { appConfig } from "../lib/config";
-import { getDb, getImageConcurrencySetting } from "../lib/db";
+import {
+  getDb,
+  getImageConcurrencySetting,
+  reclaimStaleProcessingTasks,
+  requeueOrphanProcessingTasks,
+} from "../lib/db";
 import { cleanupExpiredGeneratedImages } from "../lib/image-cleanup";
 import { processQueuedTasks } from "../lib/queue";
 
 const cleanupIntervalMs = 60 * 60 * 1000;
+const reclaimIntervalMs = 60 * 1000;
+const staleProcessingMaxAgeMinutes = 30;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -14,7 +21,15 @@ function sleep(ms: number): Promise<void> {
 async function main(): Promise<void> {
   getDb();
   console.log("image worker started");
+
+  // 单 worker 进程：启动时所有 processing 任务必然是上个进程留下的孤儿，直接重新入队。
+  const requeued = requeueOrphanProcessingTasks();
+  if (requeued > 0) {
+    console.log(`requeued ${requeued} orphan processing task(s) from previous worker run`);
+  }
+
   let lastCleanupAt = 0;
+  let lastReclaimAt = 0;
 
   while (true) {
     try {
@@ -22,6 +37,13 @@ async function main(): Promise<void> {
       const processed = await processQueuedTasks(concurrency);
       if (processed > 0) {
         console.log(`processed ${processed} image task(s), concurrency=${concurrency}`);
+      }
+      if (Date.now() - lastReclaimAt > reclaimIntervalMs) {
+        lastReclaimAt = Date.now();
+        const reclaimed = reclaimStaleProcessingTasks(staleProcessingMaxAgeMinutes);
+        if (reclaimed > 0) {
+          console.log(`reclaimed ${reclaimed} stale processing task(s) older than ${staleProcessingMaxAgeMinutes}m`);
+        }
       }
       if (Date.now() - lastCleanupAt > cleanupIntervalMs) {
         lastCleanupAt = Date.now();

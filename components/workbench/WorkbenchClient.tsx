@@ -2383,7 +2383,7 @@ function ImageCard({
         onClick={() => onOpen?.(image)}
       >
         <div className={clsx("image-frame", ratioClass)}>
-          <img src={image.url} alt={image.prompt} />
+          <img src={image.thumbnailUrl ?? image.url} alt={image.prompt} />
         </div>
         {selected ? <span className="selected-image-badge">当前参考</span> : null}
       </button>

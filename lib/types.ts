@@ -250,6 +250,7 @@ export interface PublicImage {
   userName: string | null;
   userEmail: string | null;
   url: string;
+  thumbnailUrl: string;
   width: number;
   height: number;
   prompt: string;
