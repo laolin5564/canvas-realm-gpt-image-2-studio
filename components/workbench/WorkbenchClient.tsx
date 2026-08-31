@@ -312,7 +312,7 @@ export function WorkbenchClient() {
   const [prompt, setPrompt] = useState(defaultPromptByMode.text_to_image);
   const [negativePrompt, setNegativePrompt] = useState("低清晰度，模糊，变形，多余文字");
   const [size, setSize] = useState<ImageSizeOption>("auto");
-  const [quality, setQuality] = useState<ImageQualityOption>("auto");
+  const [quality, setQuality] = useState<ImageQualityOption>("high");
   const [quantity, setQuantity] = useState<(typeof quantityOptions)[number]>(1);
   const [templateId, setTemplateId] = useState("");
   const [templateVariableValues, setTemplateVariableValues] = useState<TemplateVariableValues>({});

@@ -19,10 +19,10 @@ export const imageQualityOptions = ["auto", "low", "medium", "high"] as const;
 export type ImageQualityOption = (typeof imageQualityOptions)[number];
 
 export const imageQualityLabels: Record<ImageQualityOption, string> = {
-  auto: "默认",
+  auto: "自动（上游默认）",
   low: "低（更快）",
   medium: "中",
-  high: "高（更慢）",
+  high: "高清（默认）",
 };
 
 export function normalizeImageQualityOption(value: string | null | undefined): ImageQualityOption {
