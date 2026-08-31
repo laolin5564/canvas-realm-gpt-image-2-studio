@@ -38,7 +38,9 @@ export async function GET(
     return new Response(body, {
       headers: {
         "Content-Type": file.mimeType,
-        "Cache-Control": "public, max-age=31536000, immutable",
+        // private：仅允许浏览器本地缓存。public 会让 Cloudflare 等共享缓存把鉴权后的
+        // 图片缓存在边缘，任何拿到 URL 的人都能绕过登录读取（2026-08-31 实测确认过）。
+        "Cache-Control": "private, max-age=31536000, immutable",
         "X-Content-Type-Options": "nosniff",
       },
     });
