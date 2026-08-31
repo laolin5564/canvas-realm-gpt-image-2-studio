@@ -17,3 +17,4 @@ backups/*
 !backups/.gitkeep
 generated-images/
 coverage/
+certs/

@@ -41,7 +41,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
     const { token } = createUserSession(user.id);
     const response = NextResponse.json({ login: true, state: status.state, user: toPublicUser(user) });
-    setSessionCookie(response, token);
+    setSessionCookie(response, token, request.headers.get("host"));
     return response;
   } catch (error) {
     return handleRouteError(error);

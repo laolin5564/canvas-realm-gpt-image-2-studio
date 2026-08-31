@@ -9,7 +9,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
     logoutRequest(request);
     const response = NextResponse.json({ ok: true });
-    clearSessionCookie(response);
+    clearSessionCookie(response, request.headers.get("host"));
     return response;
   } catch (error) {
     return handleRouteError(error);

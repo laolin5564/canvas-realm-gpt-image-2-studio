@@ -78,6 +78,8 @@ export const appConfig = {
   sub2apiMaxUploadBytes: readNumberEnv("SUB2API_MAX_UPLOAD_BYTES", 15_000_000),
   sub2apiApiKey: process.env.SUB2API_API_KEY || "",
   imageEditInputFidelity: process.env.IMAGE_EDIT_INPUT_FIDELITY ?? "high",
+  imagePublicBaseUrl: (process.env.IMAGE_PUBLIC_BASE_URL || "").trim().replace(/\/+$/, ""),
+  sessionCookieDomain: (process.env.SESSION_COOKIE_DOMAIN || "").trim(),
   imageModel: process.env.IMAGE_MODEL || "gpt-image-2",
   promptOptimizerModel: process.env.PROMPT_OPTIMIZER_MODEL || "gpt-5.5",
   imageRequestTimeoutMs: readNumberEnv("IMAGE_REQUEST_TIMEOUT_MS", 300_000),

@@ -1878,12 +1878,14 @@ export function getPublicSiteSettings(): {
   siteTitle: string;
   siteSubtitle: string;
   registrationEnabled: boolean;
+  imageDirectBaseUrl: string;
 } {
   const registration = getRegistrationSettings();
   return {
     siteTitle: getAppSetting("site_title") || "Canvas Realm Studio",
     siteSubtitle: getAppSetting("site_subtitle") || "image-2 workspace",
     registrationEnabled: registration.registrationEnabled || countUsers() === 0,
+    imageDirectBaseUrl: appConfig.imagePublicBaseUrl,
   };
 }
 
@@ -3399,6 +3401,8 @@ export function toPublicTemplate(row: TemplateRow): PublicTemplate {
 }
 
 export function imagePublicUrl(filePath: string): string {
+  // 始终返回相对路径：存进画布项目等持久化数据时不携带主机名。
+  // 国内图床直连域名由 site-settings 下发，前端热点视图自行拼接并带加载失败回退。
   return `${PUBLIC_FILE_PREFIX}/${filePath.split("/").map(encodeURIComponent).join("/")}`;
 }
 

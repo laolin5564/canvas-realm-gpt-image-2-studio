@@ -57,23 +57,41 @@ function shouldUseSecureCookie(): boolean {
   return process.env.APP_BASE_URL?.startsWith("https://") ?? false;
 }
 
-export function setSessionCookie(response: NextResponse, token: string): void {
+export function cookieDomainForHost(requestHost: string | null | undefined): string | undefined {
+  const configured = process.env.SESSION_COOKIE_DOMAIN?.trim();
+  if (!configured) {
+    return undefined;
+  }
+  const host = (requestHost ?? "").split(":")[0].trim().toLowerCase();
+  const domain = configured.toLowerCase();
+  const bare = domain.startsWith(".") ? domain.slice(1) : domain;
+  // 只有当请求域名属于配置域时才下发 Domain 属性（让 cookie 覆盖 imgd 等兄弟子域）；
+  // 从 m.laolin.me 等其他入口访问时保持 host-only，避免浏览器因域不匹配拒收 cookie。
+  if (host === bare || host.endsWith(`.${bare}`)) {
+    return domain.startsWith(".") ? domain : `.${domain}`;
+  }
+  return undefined;
+}
+
+export function setSessionCookie(response: NextResponse, token: string, requestHost?: string | null): void {
   response.cookies.set(sessionCookieName, token, {
     httpOnly: true,
     sameSite: "lax",
     secure: shouldUseSecureCookie(),
     path: "/",
     maxAge: Math.floor(sessionDurationMs / 1000),
+    ...(cookieDomainForHost(requestHost) ? { domain: cookieDomainForHost(requestHost) } : {}),
   });
 }
 
-export function clearSessionCookie(response: NextResponse): void {
+export function clearSessionCookie(response: NextResponse, requestHost?: string | null): void {
   response.cookies.set(sessionCookieName, "", {
     httpOnly: true,
     sameSite: "lax",
     secure: shouldUseSecureCookie(),
     path: "/",
     maxAge: 0,
+    ...(cookieDomainForHost(requestHost) ? { domain: cookieDomainForHost(requestHost) } : {}),
   });
 }
 

@@ -22,7 +22,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     }
     const { token } = createUserSession(user.id);
     const response = NextResponse.redirect(new URL(redirectTo, getRequestOrigin(request)));
-    setSessionCookie(response, token);
+    setSessionCookie(response, token, request.headers.get("host"));
     return response;
   } catch (error) {
     return handleRouteError(error);

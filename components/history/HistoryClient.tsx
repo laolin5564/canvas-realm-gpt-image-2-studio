@@ -8,6 +8,7 @@ import clsx from "clsx";
 import { sizeFromDimensions } from "@/lib/image-options";
 import type { CurrentUser, GenerationMode, PublicImage, PublicTemplate } from "@/lib/types";
 import { apiJson, categoryLabels, copyTextToClipboard, formatDateTime, modeLabels } from "@/components/client-api";
+import { handleImgError, useImageDirectBase, withDirectBase } from "@/components/image-src";
 
 interface ImageListResponse {
   images: PublicImage[];
@@ -24,6 +25,7 @@ interface MeResponse {
 const allModes = ["", "text_to_image", "image_to_image"] as const;
 
 export function HistoryClient({ embedded = false }: { embedded?: boolean } = {}) {
+  const imageDirectBase = useImageDirectBase();
   const [keyword, setKeyword] = useState("");
   const [mode, setMode] = useState<(typeof allModes)[number]>("");
   const [templateId, setTemplateId] = useState("");
@@ -276,7 +278,11 @@ export function HistoryClient({ embedded = false }: { embedded?: boolean } = {})
                 />
               </label>
               <div className={clsx("image-frame", image.height > image.width && "tall", image.width > image.height && "wide")}>
-                <img src={image.thumbnailUrl ?? image.url} alt={image.prompt} />
+                <img
+                  src={withDirectBase(imageDirectBase, image.thumbnailUrl ?? image.url)}
+                  alt={image.prompt}
+                  onError={handleImgError}
+                />
               </div>
               <div className="image-card-body">
                 <div>

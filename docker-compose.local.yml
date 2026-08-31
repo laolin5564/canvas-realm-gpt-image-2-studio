@@ -10,6 +10,8 @@ services:
       SUB2API_HOST_HEADER: "${SUB2API_HOST_HEADER:-s2a.laolin.ai}"
       SUB2API_MAX_UPLOAD_BYTES: "${SUB2API_MAX_UPLOAD_BYTES:-15000000}"
       IMAGE_EDIT_INPUT_FIDELITY: "${IMAGE_EDIT_INPUT_FIDELITY:-high}"
+      IMAGE_PUBLIC_BASE_URL: "${IMAGE_PUBLIC_BASE_URL:-https://imgd.laolin.ai:18443}"
+      SESSION_COOKIE_DOMAIN: "${SESSION_COOKIE_DOMAIN:-.laolin.ai}"
       SUB2API_API_KEY: "${SUB2API_API_KEY}"
       IMAGE_MODEL: "${IMAGE_MODEL:-gpt-image-2}"
       IMAGE_STORAGE_DIR: "/app/data/images"
@@ -26,4 +28,15 @@ services:
       WEB_UPDATE_LOCK_FILE: "${WEB_UPDATE_LOCK_FILE:-/tmp/canvas-realm-studio-web-update.lock}"
     volumes:
       - ./data:/app/data
+    restart: unless-stopped
+
+  # 国内图床直连 TLS 入口（https://imgd.laolin.ai:18443 -> 127.0.0.1:3010）。
+  # 证书由美西机 acme.sh 自动续期并推送到 ./certs/（deploy-imgd-to-nas.sh）。
+  img-tls-proxy:
+    image: nginx:alpine
+    container_name: img-tls-proxy
+    network_mode: host
+    volumes:
+      - ./deploy/img-tls-proxy/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./certs:/etc/nginx/certs:ro
     restart: unless-stopped

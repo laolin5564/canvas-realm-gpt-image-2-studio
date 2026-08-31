@@ -35,6 +35,7 @@ import {
   sizeOptions,
 } from "@/lib/image-options";
 import type { ImageQualityOption, ImageSizeOption } from "@/lib/image-options";
+import { handleImgError, useImageDirectBase, withDirectBase } from "@/components/image-src";
 import type {
   GenerationMode,
   PublicConversation,
@@ -2373,6 +2374,7 @@ function ImageCard({
   onEdit: (image: PublicImage) => void;
   onSaveTemplate: (image: PublicImage) => Promise<void>;
 }) {
+  const imageDirectBase = useImageDirectBase();
   const ratioClass = image.height > image.width ? "tall" : image.width > image.height ? "wide" : "";
 
   return (
@@ -2383,7 +2385,11 @@ function ImageCard({
         onClick={() => onOpen?.(image)}
       >
         <div className={clsx("image-frame", ratioClass)}>
-          <img src={image.thumbnailUrl ?? image.url} alt={image.prompt} />
+          <img
+            src={withDirectBase(imageDirectBase, image.thumbnailUrl ?? image.url)}
+            alt={image.prompt}
+            onError={handleImgError}
+          />
         </div>
         {selected ? <span className="selected-image-badge">当前参考</span> : null}
       </button>
@@ -2436,6 +2442,7 @@ function SourceReferencePreview({ image, label = "参考图" }: { image: PublicS
 }
 
 function ImageLightbox({ image, onClose }: { image: PublicImage; onClose: () => void }) {
+  const lightboxDirectBase = useImageDirectBase();
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent): void {
       if (event.key === "Escape") {
@@ -2453,7 +2460,7 @@ function ImageLightbox({ image, onClose }: { image: PublicImage; onClose: () => 
         <button className="icon-button ghost image-lightbox-close" type="button" onClick={onClose} aria-label="关闭大图">
           <X size={18} aria-hidden="true" />
         </button>
-        <img src={image.url} alt={image.prompt} />
+        <img src={withDirectBase(lightboxDirectBase, image.url)} alt={image.prompt} onError={handleImgError} />
       </div>
     </div>
   );
