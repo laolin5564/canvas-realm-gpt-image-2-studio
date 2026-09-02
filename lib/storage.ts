@@ -81,6 +81,17 @@ export function thumbnailPathFor(relativePath: string): string {
   return `${relativePath}${THUMBNAIL_SUFFIX}`;
 }
 
+type SharpFactory = typeof import("sharp");
+
+async function loadSharp(): Promise<SharpFactory | null> {
+  try {
+    const { default: sharp } = await import("sharp");
+    return sharp;
+  } catch {
+    return null;
+  }
+}
+
 export async function generateThumbnailFile(relativePath: string, bytes: Uint8Array): Promise<void> {
   const { default: sharp } = await import("sharp");
   const thumbBytes = await sharp(Buffer.from(bytes))
@@ -91,25 +102,82 @@ export async function generateThumbnailFile(relativePath: string, bytes: Uint8Ar
   await writeStorageFile(thumbnailPathFor(relativePath), new Uint8Array(thumbBytes));
 }
 
+export interface SavedGeneratedImage {
+  relativePath: string;
+  /** 落盘后的真实像素宽度，读不出来时为 0。 */
+  width: number;
+  /** 落盘后的真实像素高度，读不出来时为 0。 */
+  height: number;
+}
+
+/** 实际比例与目标比例的允许偏差（相对值）。 */
+export const RATIO_TOLERANCE = 0.02;
+
+export async function fitImageToTargetRatio(
+  bytes: Uint8Array,
+  targetRatio?: { width: number; height: number },
+): Promise<{ bytes: Uint8Array; width: number; height: number }> {
+  const sharp = await loadSharp();
+  if (!sharp) {
+    // 没装 sharp 时保持原样落盘，尺寸未知。
+    return { bytes, width: 0, height: 0 };
+  }
+
+  try {
+    const metadata = await sharp(Buffer.from(bytes)).metadata();
+    const width = metadata.width ?? 0;
+    const height = metadata.height ?? 0;
+    const ratio = targetRatio && targetRatio.width > 0 && targetRatio.height > 0 ? targetRatio : null;
+    if (!ratio || width <= 0 || height <= 0) {
+      return { bytes, width, height };
+    }
+
+    const target = ratio.width / ratio.height;
+    const actual = width / height;
+    if (Math.abs(actual - target) <= target * RATIO_TOLERANCE) {
+      return { bytes, width, height };
+    }
+
+    // 上游经常不严格遵守 size（例如统一返回 1254px 方图），这里按目标比例居中裁切。
+    const cropWidth = actual > target ? Math.max(1, Math.round(height * target)) : width;
+    const cropHeight = actual > target ? height : Math.max(1, Math.round(width / target));
+    const cropped = await sharp(Buffer.from(bytes))
+      .resize({ width: cropWidth, height: cropHeight, fit: "cover", position: "centre" })
+      .toBuffer();
+    const croppedMetadata = await sharp(cropped).metadata();
+    return {
+      bytes: new Uint8Array(cropped),
+      width: croppedMetadata.width ?? cropWidth,
+      height: croppedMetadata.height ?? cropHeight,
+    };
+  } catch {
+    // 解码/裁切失败时不阻断落盘，退回原始字节。
+    return { bytes, width: 0, height: 0 };
+  }
+}
+
 export async function saveGeneratedImageFile(input: {
   taskId: string;
   imageId: string;
   bytes: Uint8Array;
   mimeType: string | null;
-}): Promise<string> {
+  /** 目标宽高比（宽高任一 <= 0 表示 auto，不裁切）。 */
+  targetRatio?: { width: number; height: number };
+}): Promise<SavedGeneratedImage> {
   const extension = extensionForMime(input.mimeType);
   const relativePath = path.posix.join(
     ...datedPathParts(),
     input.taskId,
     `${input.imageId}.${extension}`,
   );
-  await writeStorageFile(relativePath, input.bytes);
+  const fitted = await fitImageToTargetRatio(input.bytes, input.targetRatio);
+  await writeStorageFile(relativePath, fitted.bytes);
   try {
-    await generateThumbnailFile(relativePath, input.bytes);
+    await generateThumbnailFile(relativePath, fitted.bytes);
   } catch {
     // 缩略图失败不影响原图落盘，列表端会自动回退加载原图。
   }
-  return relativePath;
+  return { relativePath, width: fitted.width, height: fitted.height };
 }
 
 export async function saveSourceImageFile(input: {
