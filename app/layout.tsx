@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import "tldraw/tldraw.css";
+// tldraw/tldraw.css 只在 app/canvas/layout.tsx 里引入，避免其它页面白白下载画布样式表。
 import "./globals.css";
 import { AppShell } from "@/components/AppShell";
 import { getPublicSiteSettings } from "@/lib/db";
