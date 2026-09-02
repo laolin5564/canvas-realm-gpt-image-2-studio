@@ -1,6 +1,24 @@
 // 生图批次调度：把「一批 n=1 请求怎么发、失败怎么补、什么时候换渠道」这套逻辑
 // 从 image-provider 里拆出来，既避免和 HTTP/DB 细节纠缠，也方便单测。
 
+import { imageErrorStatus } from "./image-retry";
+import { isModelTimeoutMessage } from "./model-error";
+
+/**
+ * 超时类错误：这次请求已经把整个超时窗口（默认 300s）烧完了。
+ * 在同一渠道原地补发等于再烧一遍，用户要等 600s 才看到失败，所以超时一律直接切下一渠道。
+ */
+export function isImageTimeoutError(error: unknown): boolean {
+  if (error instanceof DOMException) {
+    return error.name === "TimeoutError";
+  }
+  const status = imageErrorStatus(error);
+  if (status === 504 || status === 524) {
+    return true;
+  }
+  return isModelTimeoutMessage(error instanceof Error ? error.message : String(error ?? ""));
+}
+
 export interface ImageBatchOptions<TImage> {
   /** 任务需要的总张数。 */
   total: number;
@@ -14,6 +32,11 @@ export interface ImageBatchOptions<TImage> {
   delivered: () => number;
   isAbort: (error: unknown) => boolean;
   isRetryable: (error: unknown) => boolean;
+  /**
+   * 可重试、但不该在本渠道原地补发的错误（默认：超时）。命中就直接上抛，
+   * 交给 runAcrossChannels 换下一个渠道。
+   */
+  shouldSwitchChannel?: (error: unknown) => boolean;
   /** 同一渠道内一批请求失败后最多补发几轮，默认 1。 */
   maxRetriesPerBatch?: number;
 }
@@ -26,6 +49,7 @@ export interface ImageBatchOptions<TImage> {
 export async function runImageGenerationBatches<TImage>(options: ImageBatchOptions<TImage>): Promise<void> {
   const concurrency = Math.max(1, Math.floor(options.concurrency));
   const maxRetries = options.maxRetriesPerBatch ?? 1;
+  const shouldSwitchChannel = options.shouldSwitchChannel ?? isImageTimeoutError;
   const remaining = (): number => options.total - options.delivered();
 
   let retryBudget = maxRetries;
@@ -72,6 +96,12 @@ export async function runImageGenerationBatches<TImage>(options: ImageBatchOptio
     const fatal = failures.find((reason) => !options.isRetryable(reason));
     if (fatal !== undefined) {
       throw fatal;
+    }
+
+    // 超时不在本渠道补发：直接上抛，让 failover 去下一个渠道，避免 300s + 300s 的连环等待。
+    const switchNow = failures.find((reason) => shouldSwitchChannel(reason));
+    if (switchNow !== undefined) {
+      throw switchNow;
     }
 
     if (retryBudget <= 0) {

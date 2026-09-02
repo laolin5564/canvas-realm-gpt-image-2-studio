@@ -10,6 +10,7 @@ const nodeSuites = [
   "db-data-billing.node.ts",
   "db-migration.node.ts",
   "data-management.node.ts",
+  "observability.node.ts",
   "permissions.node.ts",
   "queue-claim.node.ts",
 ];

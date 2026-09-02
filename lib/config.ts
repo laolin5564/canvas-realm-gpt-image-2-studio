@@ -83,7 +83,8 @@ export const appConfig = {
   imageModel: process.env.IMAGE_MODEL || "gpt-image-2",
   promptOptimizerModel: process.env.PROMPT_OPTIMIZER_MODEL || "gpt-5.5",
   imageRequestTimeoutMs: readNumberEnv("IMAGE_REQUEST_TIMEOUT_MS", 300_000),
-  workerPollIntervalMs: readNumberEnv("WORKER_POLL_INTERVAL_MS", 3_000),
+  // 槽位释放会立刻叫醒 worker，轮询只是兜底，默认压到 1s。
+  workerPollIntervalMs: readNumberEnv("WORKER_POLL_INTERVAL_MS", 1_000),
   costPerImage: readNumberEnv("COST_PER_IMAGE", 0.04),
   openaiOAuthApiBaseUrl: process.env.OPENAI_OAUTH_API_BASE_URL || "https://api.openai.com/v1",
   openaiOAuthClientId: process.env.OPENAI_OAUTH_CLIENT_ID || "",

@@ -99,6 +99,18 @@ test("旧库补上 image_count 时会回填，历史用量不被清零", async (
     ).map((row) => [row.id, row.image_count]),
   );
 
+  // 首启迁移：新增列 / 新增表都得在老库上补出来，且不影响既有数据。
+  const taskColumns = (
+    db.getDb().prepare("PRAGMA table_info(generation_tasks)").all() as Array<{ name: string }>
+  ).map((column) => column.name);
+  assert.equal(taskColumns.includes("image_count"), true);
+  assert.equal(taskColumns.includes("error_detail"), true);
+  const attemptsTable = db
+    .getDb()
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'generation_attempts'")
+    .get();
+  assert.notEqual(attemptsTable, undefined);
+
   assert.equal(counts.get("task_kept"), 2);
   assert.equal(counts.get("task_pruned"), 4);
   assert.equal(counts.get("task_queued"), 0);

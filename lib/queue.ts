@@ -17,6 +17,7 @@ import { normalizeImageConcurrency } from "./concurrency";
 import { ratioForOption } from "./image-options";
 import { callImageModel } from "./image-provider";
 import { isModelTimeoutMessage } from "./model-error";
+import { modelErrorDetail } from "./model-error-detail";
 import { saveGeneratedImageFile } from "./storage";
 import type { GenerationTaskRow } from "./types";
 
@@ -118,6 +119,8 @@ async function processClaimedTask(task: GenerationTaskRow): Promise<void> {
       return;
     }
     let message = error instanceof Error ? error.message : "生成任务处理失败";
+    // error_message 留给用户看，error_detail 才带状态码和上游原文，只在管理员接口下发。
+    const detail = modelErrorDetail(error);
     if (isModelTimeoutMessage(message)) {
       const timeout = recordImageTimeoutFailure();
       if (timeout.degraded) {
@@ -126,7 +129,7 @@ async function processClaimedTask(task: GenerationTaskRow): Promise<void> {
     } else {
       resetImageTimeoutStreak();
     }
-    markTaskFailed(task.id, message);
+    markTaskFailed(task.id, message, detail);
   }
 }
 
