@@ -17,12 +17,15 @@ import {
 } from "lucide-react";
 import clsx from "clsx";
 import { apiJson } from "@/components/client-api";
+import { ImageDirectBaseContext, normalizeDirectBase } from "@/components/image-src";
 import type { CurrentUser } from "@/lib/types";
 
 interface SiteSettings {
   siteTitle: string;
   siteSubtitle: string;
   registrationEnabled: boolean;
+  /** 服务端下发的国内直连图床前缀；首帧就用它拼图片地址，避免二次切换。 */
+  imageDirectBaseUrl?: string;
 }
 
 interface AuthResponse {
@@ -90,8 +93,9 @@ export function AppShell({
   }
 
   const visibleNavItems = navItems.filter((item) => item.href !== "/admin" || user?.role === "admin");
+  const imageDirectBase = normalizeDirectBase(siteSettings.imageDirectBaseUrl);
 
-  return (
+  const shell = (
     <div className="app-shell">
       <header className="topbar">
         <Link href="/" className="brand" aria-label="返回生成工作台">
@@ -145,4 +149,6 @@ export function AppShell({
       <main className="main-content">{authLoaded && (user || pathname === "/login") ? children : null}</main>
     </div>
   );
+
+  return <ImageDirectBaseContext.Provider value={imageDirectBase}>{shell}</ImageDirectBaseContext.Provider>;
 }

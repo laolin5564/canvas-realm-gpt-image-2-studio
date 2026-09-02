@@ -1,3 +1,23 @@
+/** 带上 HTTP 状态码的请求错误，方便调用方区分 401 / 5xx；沿用 Error.message 不影响老调用点。 */
+export class ApiError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
+export function isUnauthorizedError(error: unknown): boolean {
+  return error instanceof ApiError && (error.status === 401 || error.status === 403);
+}
+
+/** AbortController 取消在途请求时抛的不是业务错误，调用方一律静默丢弃。 */
+export function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException ? error.name === "AbortError" : (error as Error | null)?.name === "AbortError";
+}
+
 export async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     ...init,
@@ -9,7 +29,7 @@ export async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     const payload = (await response.json().catch(() => null)) as { error?: string } | null;
-    throw new Error(payload?.error || `请求失败：${response.status}`);
+    throw new ApiError(payload?.error || `请求失败：${response.status}`, response.status);
   }
 
   return response.json() as Promise<T>;

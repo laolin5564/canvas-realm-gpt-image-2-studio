@@ -4564,6 +4564,210 @@ button.nav-link {
 }
 
 /* =========================================================================
+   C 工作包（工作台主流程）新增规则：右上角 toast、生成进度卡、任务参数小标签、
+   失败详情面板、额度不足提示。只追加新选择器，不修改上面任何既有规则。
+   ========================================================================= */
+
+.toast-stack {
+  position: fixed;
+  z-index: 90;
+  top: 4.6rem;
+  right: 1.1rem;
+  display: grid;
+  gap: 0.5rem;
+  width: min(22rem, calc(100vw - 2rem));
+  pointer-events: none;
+}
+
+.toast-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid rgba(205, 216, 209, 0.96);
+  border-radius: 0.7rem;
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: 0 12px 34px rgba(18, 32, 25, 0.16);
+  color: var(--ink);
+  font-size: 0.84rem;
+  line-height: 1.5;
+  pointer-events: auto;
+  animation: toast-slide-in 160ms ease-out;
+}
+
+.toast-item.success {
+  border-color: rgba(102, 170, 134, 0.6);
+}
+
+.toast-item.error {
+  border-color: rgba(214, 96, 82, 0.6);
+  color: var(--danger);
+}
+
+.toast-item span {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.toast-item svg {
+  flex: 0 0 auto;
+  margin-top: 0.15rem;
+}
+
+.toast-close {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.3rem;
+  height: 1.3rem;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.6;
+}
+
+.toast-close:hover {
+  opacity: 1;
+}
+
+@keyframes toast-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(-0.4rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.task-progress-bubble {
+  width: min(100%, 34rem);
+}
+
+.task-progress-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.85rem;
+  color: var(--muted);
+  font-size: 0.79rem;
+  font-weight: 700;
+}
+
+.image-meta-badges {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.image-meta-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.16rem 0.46rem;
+  border: 1px solid rgba(196, 211, 202, 0.9);
+  border-radius: 999px;
+  background: rgba(240, 246, 243, 0.86);
+  color: var(--accent-strong);
+  font-size: 0.72rem;
+  font-weight: 720;
+  white-space: nowrap;
+}
+
+.message-row.user .image-meta-badge {
+  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--ink-inverse);
+}
+
+.image-card.selected {
+  border-color: var(--accent-strong);
+}
+
+.card-actions .icon-button.active {
+  border-color: var(--accent-strong);
+  color: var(--accent-strong);
+}
+
+.task-error-panel {
+  display: grid;
+  justify-items: start;
+  gap: 0.4rem;
+}
+
+.task-error-detail {
+  display: grid;
+  gap: 0.3rem;
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid rgba(214, 96, 82, 0.32);
+  border-radius: 0.6rem;
+  background: rgba(253, 244, 242, 0.9);
+}
+
+.task-error-detail pre {
+  margin: 0;
+  max-height: 12rem;
+  overflow: auto;
+  color: var(--danger);
+  font-size: 0.76rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.task-error-detail small {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.quota-empty-hint {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid rgba(214, 96, 82, 0.34);
+  border-radius: 0.7rem;
+  background: rgba(253, 244, 242, 0.86);
+  color: var(--danger);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.quota-empty-hint > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.upload-preview-placeholder {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  min-height: 4.5rem;
+  border: 1px dashed rgba(196, 211, 202, 0.95);
+  border-radius: 0.6rem;
+  background: rgba(240, 246, 243, 0.7);
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+@media (max-width: 720px) {
+  .toast-stack {
+    top: auto;
+    right: 0.7rem;
+    bottom: 0.9rem;
+    left: 0.7rem;
+    width: auto;
+  }
+}
+
+/* =========================================================================
    F 工作包（次级前端页面）新增规则：历史页「加载更多」/ 刷新态、历史页灯箱。
    为避免与并行改动冲突，这里只追加新选择器，不修改上面任何既有规则。
    ========================================================================= */
