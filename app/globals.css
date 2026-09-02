@@ -4562,3 +4562,141 @@ button.nav-link {
     min-width: 48rem;
   }
 }
+
+/* =========================================================================
+   F 工作包（次级前端页面）新增规则：历史页「加载更多」/ 刷新态、历史页灯箱。
+   为避免与并行改动冲突，这里只追加新选择器，不修改上面任何既有规则。
+   ========================================================================= */
+
+.image-grid.history-refreshing {
+  opacity: 0.55;
+  transition: opacity 160ms ease;
+}
+
+.history-load-more {
+  display: grid;
+  place-items: center;
+  gap: 0.4rem;
+  padding: 1.1rem 0 0.2rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.history-load-more .button svg:first-child {
+  flex: 0 0 auto;
+}
+
+.history-load-more .button:disabled svg:first-child {
+  animation: spin 0.9s linear infinite;
+}
+
+.image-lightbox-toolbar {
+  position: absolute;
+  z-index: 2;
+  top: 0.75rem;
+  right: 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.image-lightbox-toolbar .icon-button {
+  border-color: rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  backdrop-filter: blur(10px);
+}
+
+.image-lightbox-toolbar .icon-button:hover {
+  border-color: rgba(255, 255, 255, 0.42);
+  background: rgba(255, 255, 255, 0.24);
+}
+
+.image-lightbox-counter {
+  margin-right: 0.25rem;
+  padding: 0.3rem 0.6rem;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.42);
+  color: #fff;
+  font-size: 0.76rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  backdrop-filter: blur(10px);
+}
+
+.image-lightbox-viewport {
+  display: grid;
+  max-height: 88vh;
+  overflow: hidden;
+  place-items: center;
+}
+
+.image-lightbox-viewport.actual {
+  overflow: auto;
+  place-items: start;
+}
+
+.image-lightbox-viewport.actual img {
+  max-width: none;
+  max-height: none;
+  cursor: grab;
+}
+
+.image-lightbox-nav {
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  display: inline-flex;
+  width: 2.75rem;
+  height: 2.75rem;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.42);
+  color: #fff;
+  cursor: pointer;
+  transform: translateY(-50%);
+  backdrop-filter: blur(10px);
+  transition:
+    background 160ms ease,
+    border-color 160ms ease;
+}
+
+.image-lightbox-nav:hover {
+  border-color: rgba(255, 255, 255, 0.46);
+  background: rgba(0, 0, 0, 0.62);
+}
+
+.image-lightbox-nav.previous {
+  left: 0.7rem;
+}
+
+.image-lightbox-nav.next {
+  right: 0.7rem;
+}
+
+.image-lightbox-caption {
+  padding: 0.6rem 0.9rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(0, 0, 0, 0.42);
+  color: rgba(255, 255, 255, 0.86);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+@media (max-width: 720px) {
+  .image-lightbox-nav {
+    width: 2.35rem;
+    height: 2.35rem;
+  }
+
+  .image-lightbox-caption {
+    display: none;
+  }
+}

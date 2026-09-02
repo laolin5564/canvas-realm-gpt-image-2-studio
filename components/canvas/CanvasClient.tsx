@@ -790,6 +790,11 @@ export function CanvasClient() {
     if (!editor) return;
     const ids = editor.getCurrentPageShapes().map((shape) => shape.id);
     if (ids.length > 0) {
+      // 二次确认放在删除之前：用户取消时不会产生任何 store 变更，也就不会触发自动保存。
+      const ok = window.confirm(`确定清空画布上的 ${ids.length} 个元素吗？此操作会同时保存到画布项目。`);
+      if (!ok) {
+        return;
+      }
       unlockAndDeleteShapes(editor, ids);
       setCanvasShapeCount(0);
       setWorkflowOverview(emptyWorkflowOverview());
@@ -873,7 +878,8 @@ export function CanvasClient() {
           {images.map((image) => (
             <article className="canvas-history-item" key={image.id}>
               <button className="canvas-history-thumb" type="button" onClick={() => locateHistoryImage(image)} title="定位或加入画布">
-                <img src={image.url} alt={image.prompt} />
+                {/* 素材列表只加载缩略图（?thumb=1，服务端缺图时自动回退原图），不拉原图 */}
+                <img src={image.thumbnailUrl ?? image.url} alt={image.prompt} loading="lazy" decoding="async" />
               </button>
               <div className="canvas-history-copy">
                 <strong>{image.prompt}</strong>
@@ -1012,7 +1018,7 @@ export function CanvasClient() {
                 <div className="canvas-reference-list">
                   {selectedReferences.map((reference) => (
                     <button key={reference.shapeId} type="button" onClick={() => zoomToShape(editorRef.current, reference.shapeId)}>
-                      <img src={reference.url} alt={reference.name} />
+                      <img src={reference.url} alt={reference.name} loading="lazy" decoding="async" />
                       <span>{canvasReferenceLabel(reference)}</span>
                     </button>
                   ))}
@@ -1203,7 +1209,7 @@ export function CanvasClient() {
               <div className="canvas-compare-grid">
                 {selectedReferences.map((reference, index) => (
                   <button key={reference.shapeId} type="button" onClick={() => selectSingleReference(reference)}>
-                    <img src={reference.url} alt={reference.name} />
+                    <img src={reference.url} alt={reference.name} loading="lazy" decoding="async" />
                     <span>只用第 {index + 1} 张</span>
                   </button>
                 ))}
@@ -1279,7 +1285,7 @@ function WorkflowReferenceList({
         <div className="canvas-node-reference-grid">
           {references.map((reference, index) => (
             <button key={`${title}-${reference.shapeId}`} type="button" onClick={() => onSelect(reference)}>
-              <img src={reference.url} alt={reference.name} />
+              <img src={reference.url} alt={reference.name} loading="lazy" decoding="async" />
               <span>{index + 1}</span>
             </button>
           ))}
