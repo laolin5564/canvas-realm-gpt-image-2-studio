@@ -8,7 +8,8 @@ import {
   getRegistrationSettings,
   getSessionByTokenHash,
   getUserById,
-  toPublicUser,
+  getUserGroup,
+  getUserQuota,
 } from "./db";
 import type { CurrentUser, UserRow } from "./types";
 
@@ -146,19 +147,28 @@ export function requireAdmin(request: NextRequest): CurrentUser {
   return user;
 }
 
+/**
+ * 只做身份，不做账务。
+ * 之前这里走 toPublicUser()，等于每个带鉴权的请求都要对 generation_tasks 做一次
+ * 当月聚合；用量改由需要展示额度的地方（/api/auth/me）显式调 withUserQuota 补。
+ */
 export function toCurrentUser(user: UserRow): CurrentUser {
-  const publicUser = toPublicUser(user);
+  const group = user.group_id ? getUserGroup(user.group_id) : null;
   return {
-    id: publicUser.id,
-    email: publicUser.email,
-    externalId: publicUser.externalId,
-    name: publicUser.name,
-    role: publicUser.role,
-    groupId: publicUser.groupId,
-    groupName: publicUser.groupName,
-    monthlyQuota: publicUser.monthlyQuota,
-    monthUsed: publicUser.monthUsed,
+    id: user.id,
+    email: user.email,
+    externalId: user.external_id,
+    name: user.name,
+    role: user.role,
+    groupId: user.group_id,
+    groupName: group?.name ?? null,
   };
+}
+
+/** 给 CurrentUser 补上当月用量与限额（会跑一次月度聚合，只在真正要展示额度时调）。 */
+export function withUserQuota(user: CurrentUser): CurrentUser {
+  const quota = getUserQuota(user.id);
+  return { ...user, monthlyQuota: quota.monthlyQuota, monthUsed: quota.monthUsed };
 }
 
 export function nextUserRoleForRegistration(): "admin" | "member" {

@@ -86,6 +86,8 @@ export interface GenerationTaskRow {
   size: string;
   quality: string | null;
   quantity: number;
+  // 这个任务真实落库过几张图；会话删除 / 保留期清理不会把它减回去，计费以它为准。
+  image_count: number;
   requested_concurrency: number | null;
   template_id: string | null;
   source_image_id: string | null;
@@ -289,6 +291,7 @@ export interface PublicTask {
   promptSuffix: string | null;
   negativePrompt: string | null;
   size: string;
+  quality: string | null;
   quantity: number;
   requestedConcurrency: number | null;
   templateId: string | null;
@@ -384,8 +387,10 @@ export interface CurrentUser {
   role: UserRole;
   groupId: string | null;
   groupName: string | null;
-  monthlyQuota: number | null;
-  monthUsed: number;
+  // 用量是按月聚合出来的，鉴权路径上不再每请求算一次：
+  // 只有 /api/auth/me 这类真正要展示额度的地方才显式调 getUserQuota 填上。
+  monthlyQuota?: number | null;
+  monthUsed?: number;
 }
 
 export interface PublicTemplate {

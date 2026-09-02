@@ -20,6 +20,8 @@ export async function POST(
     }
     assertTaskAccess(user, task);
 
+    // 取消语义：任务落到 status='failed' + progressStage='canceled'（见 lib/db.ts
+    // taskStoppedMessage 的说明），取消前已经出的图保留、继续展示、并且照常计费。
     const canceled = cancelGenerationTask(id);
     if (!canceled) {
       return jsonError("任务不存在", 404);
