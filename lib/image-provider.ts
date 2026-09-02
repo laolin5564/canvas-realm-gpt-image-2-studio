@@ -5,13 +5,16 @@ import { appConfig, IMAGE_USER_AGENT } from "./config";
 import {
   getRuntimeImageSettings,
   getUsableOpenAIOAuthAccount,
+  nowIso,
+  recordGenerationAttempt,
   updateOpenAIOAuthAccountStatus,
   updateOpenAIOAuthAccountTokens,
 } from "./db";
 import { apiQualityForOption, apiSizeForOption } from "./image-options";
 import { fitReferenceImagesToBudget, type ReferenceImageUpload } from "./image-upload";
-import { runAcrossChannels, runImageGenerationBatches } from "./image-batch";
-import { isRetryableImageError, UpstreamImageError } from "./image-retry";
+import { isImageTimeoutError, runAcrossChannels, runImageGenerationBatches } from "./image-batch";
+import { imageErrorStatus, isRetryableImageError } from "./image-retry";
+import { modelErrorDetail, UpstreamImageDetailError } from "./model-error-detail";
 import { withUpstreamImageSlot } from "./concurrency";
 import {
   decodeOpenAIIdToken,
@@ -23,7 +26,7 @@ import {
 } from "./openai-oauth";
 import { withOptionalHostHeader } from "./http-host";
 import { extractOpenAIOAuthImagesFromResponsesStream } from "./openai-image-bridge";
-import { formatModelError } from "./model-error";
+import { formatModelError, formatModelErrorDetail } from "./model-error";
 import { fetchWithOptionalProxy } from "./proxy";
 import type { GenerationTaskRow, ImageProvider, OpenAIOAuthAccountRow } from "./types";
 import { assertSupportedImage, assertSupportedImageBytes, readStorageFile } from "./storage";
@@ -129,6 +132,8 @@ async function callImageModelWithSettings(
     deliver,
     isAbort: (error) => isAbortError(error) || Boolean(signal?.aborted),
     isRetryable: isRetryableImageError,
+    // 超时不在本渠道补发：直接换下一个渠道，别让用户等两个超时窗口。
+    shouldSwitchChannel: isImageTimeoutError,
     maxRetriesPerBatch: 1,
   });
 }
@@ -163,6 +168,54 @@ export function createReferenceImageLoader(sourceImagePaths: string[]): Referenc
   };
 
   return { raw, forUpload, count: sourceImagePaths.length };
+}
+
+/**
+ * 给一次上游 n=1 请求记一条遥测（成功、失败都记）。
+ * 记录只包在实际请求外面，不含等信号量槽位的时间，耗时才是渠道自己的表现。
+ * 遥测写库失败只打日志：可观测性不该反过来把生成任务弄挂。
+ */
+async function withAttemptTelemetry<T>(
+  task: GenerationTaskRow,
+  settings: ImageRequestSettings,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const startedAt = nowIso();
+  const startedTs = Date.now();
+
+  const save = (ok: boolean, statusCode: number | null, errorMessage: string | null): void => {
+    try {
+      recordGenerationAttempt({
+        taskId: task.id,
+        channelId: settings.channelId ?? null,
+        channelName: settings.channelName ?? null,
+        statusCode,
+        ok,
+        durationMs: Date.now() - startedTs,
+        errorMessage,
+        startedAt,
+      });
+    } catch (error) {
+      console.error(
+        `record generation attempt failed: ${error instanceof Error ? error.message : error}`,
+      );
+    }
+  };
+
+  try {
+    const result = await operation();
+    // 能走到这里说明响应已经是 2xx（非 2xx 在 readModelResponse 里就抛了）。
+    save(true, 200, null);
+    return result;
+  } catch (error) {
+    if (isAbortError(error)) {
+      // 用户主动停止：不是渠道的锅，不计进渠道统计。
+      throw error;
+    }
+    const reason = modelErrorDetail(error) ?? (error instanceof Error ? error.message : String(error ?? ""));
+    save(false, imageErrorStatus(error), reason);
+    throw error;
+  }
 }
 
 function normalizeTaskImageConcurrency(value: number | null, fallback: number): number {
@@ -288,20 +341,22 @@ async function requestTextToImage(
     body.quality = apiQuality;
   }
 
-  return withUpstreamImageSlot(async () => {
-    const response = await fetch(`${settings.baseUrl}/images/generations`, {
-      method: "POST",
-      headers: withOptionalHostHeader({
-        Authorization: `Bearer ${settings.bearerToken}`,
-        "Content-Type": "application/json",
-        "User-Agent": IMAGE_USER_AGENT,
-      }, settings.hostHeader),
-      body: JSON.stringify(body),
-      signal: requestSignal(signal),
-    });
+  return withUpstreamImageSlot(() =>
+    withAttemptTelemetry(task, settings, async () => {
+      const response = await fetch(`${settings.baseUrl}/images/generations`, {
+        method: "POST",
+        headers: withOptionalHostHeader({
+          Authorization: `Bearer ${settings.bearerToken}`,
+          "Content-Type": "application/json",
+          "User-Agent": IMAGE_USER_AGENT,
+        }, settings.hostHeader),
+        body: JSON.stringify(body),
+        signal: requestSignal(signal),
+      });
 
-    return readModelResponse(response, "image generation failed", settings);
-  });
+      return readModelResponse(response, "image generation failed", settings);
+    }),
+  );
 }
 
 async function requestImageEdit(
@@ -340,19 +395,21 @@ async function requestImageEdit(
     form.append("input_fidelity", appConfig.imageEditInputFidelity);
   }
 
-  return withUpstreamImageSlot(async () => {
-    const response = await fetch(`${settings.baseUrl}/images/edits`, {
-      method: "POST",
-      headers: withOptionalHostHeader({
-        Authorization: `Bearer ${settings.bearerToken}`,
-        "User-Agent": IMAGE_USER_AGENT,
-      }, settings.hostHeader),
-      body: form,
-      signal: requestSignal(signal),
-    });
+  return withUpstreamImageSlot(() =>
+    withAttemptTelemetry(task, settings, async () => {
+      const response = await fetch(`${settings.baseUrl}/images/edits`, {
+        method: "POST",
+        headers: withOptionalHostHeader({
+          Authorization: `Bearer ${settings.bearerToken}`,
+          "User-Agent": IMAGE_USER_AGENT,
+        }, settings.hostHeader),
+        body: form,
+        signal: requestSignal(signal),
+      });
 
-    return readModelResponse(response, "image edit failed", settings);
-  });
+      return readModelResponse(response, "image edit failed", settings);
+    }),
+  );
 }
 
 const emptyReferenceImageLoader: ReferenceImageLoader = {
@@ -385,30 +442,37 @@ async function requestOpenAIOAuthImage(
     headers.session_id = sessionId;
   }
 
-  return withUpstreamImageSlot(async () => {
-    const response = await fetchWithOptionalProxy(openAIChatGPTCodexResponsesUrl, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
-      signal: requestSignal(signal),
-    }, settings.openaiOAuthProxyUrl);
+  return withUpstreamImageSlot(() =>
+    withAttemptTelemetry(task, settings, async () => {
+      const response = await fetchWithOptionalProxy(openAIChatGPTCodexResponsesUrl, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+        signal: requestSignal(signal),
+      }, settings.openaiOAuthProxyUrl);
 
-    if (!response.ok) {
-      const text = await response.text();
-      const message = formatModelError(response.status, text, "OpenAI OAuth Codex image generation failed");
-      if (response.status === 401 && settings.oauthAccountId) {
-        updateOpenAIOAuthAccountStatus(settings.oauthAccountId, "error", message);
+      if (!response.ok) {
+        const text = await response.text();
+        const fallback = "OpenAI OAuth Codex image generation failed";
+        const message = formatModelError(response.status, text, fallback);
+        if (response.status === 401 && settings.oauthAccountId) {
+          updateOpenAIOAuthAccountStatus(settings.oauthAccountId, "error", message);
+        }
+        throw new UpstreamImageDetailError(
+          message,
+          response.status,
+          formatModelErrorDetail(response.status, text, fallback),
+        );
       }
-      throw new UpstreamImageError(message, response.status);
-    }
 
-    const text = await response.text();
-    const images = extractOpenAIOAuthImagesFromResponsesStream(text);
-    if (images.length === 0) {
-      throw new Error("OpenAI OAuth Codex Responses 未返回图片数据");
-    }
-    return { data: images };
-  });
+      const text = await response.text();
+      const images = extractOpenAIOAuthImagesFromResponsesStream(text);
+      if (images.length === 0) {
+        throw new Error("OpenAI OAuth Codex Responses 未返回图片数据");
+      }
+      return { data: images };
+    }),
+  );
 }
 
 async function buildOpenAIOAuthResponsesBody(
@@ -486,8 +550,13 @@ async function readModelResponse(
     if (settings.provider === "openai_oauth" && response.status === 401 && settings.oauthAccountId) {
       updateOpenAIOAuthAccountStatus(settings.oauthAccountId, "error", message);
     }
-    // 带上 status，让上层区分「换渠道有救」（5xx/429/408）和「换几次都白搭」（其余 4xx）。
-    throw new UpstreamImageError(message, response.status);
+    // 带上 status，让上层区分「换渠道有救」（5xx/429/408）和「换几次都白搭」（其余 4xx）；
+    // detail 是给管理员看的原文，用户看到的仍然只有上面那句短文案。
+    throw new UpstreamImageDetailError(
+      message,
+      response.status,
+      `${messagePrefix}${formatModelErrorDetail(response.status, text, fallback)}`,
+    );
   }
 
   return response.json();

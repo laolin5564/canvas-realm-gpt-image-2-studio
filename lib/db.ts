@@ -4,7 +4,8 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { appConfig, PUBLIC_FILE_PREFIX } from "./config";
 import { composeConversationPrompt, normalizeConversationFixedPrompt } from "./conversation-prompt";
-import { normalizeImageConcurrency } from "./concurrency";
+import { normalizeImageConcurrency, resolveUpstreamImageMaxInflight } from "./concurrency";
+import { summarizeAttemptsByChannel, type AttemptSample } from "./attempt-stats";
 import { apiQualityForOption, normalizeImageSizeOption } from "./image-options";
 import { normalizeProxyUrl, redactProxyUrl } from "./proxy";
 import type {
@@ -12,8 +13,10 @@ import type {
   AdminUserListSummary,
   AdminUserPagination,
   CanvasProjectRow,
+  ChannelAttemptStats,
   ConversationMessageRow,
   ConversationRow,
+  GenerationAttemptRow,
   GenerationMode,
   GenerationTaskRow,
   GeneratedImageRow,
@@ -738,6 +741,24 @@ function initializeSchema(database: DatabaseSync): void {
 
     CREATE INDEX IF NOT EXISTS idx_openai_oauth_sessions_expires
       ON openai_oauth_sessions (expires_at);
+
+    CREATE TABLE IF NOT EXISTS generation_attempts (
+      id TEXT PRIMARY KEY,
+      task_id TEXT,
+      channel_id TEXT,
+      channel_name TEXT,
+      status_code INTEGER,
+      ok INTEGER NOT NULL DEFAULT 0,
+      duration_ms INTEGER NOT NULL DEFAULT 0,
+      error_message TEXT,
+      started_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_generation_attempts_task
+      ON generation_attempts (task_id);
+
+    CREATE INDEX IF NOT EXISTS idx_generation_attempts_started
+      ON generation_attempts (started_at);
   `);
   ensureColumn(database, "generation_tasks", "user_id", "TEXT");
   ensureColumn(database, "generation_tasks", "conversation_id", "TEXT");
@@ -751,6 +772,7 @@ function initializeSchema(database: DatabaseSync): void {
   if (ensureColumn(database, "generation_tasks", "image_count", "INTEGER NOT NULL DEFAULT 0")) {
     backfillTaskImageCount(database);
   }
+  ensureColumn(database, "generation_tasks", "error_detail", "TEXT");
   ensureColumn(database, "templates", "owner_user_id", "TEXT");
   ensureColumn(database, "templates", "template_variables", "TEXT");
   ensureColumn(database, "source_images", "user_id", "TEXT");
@@ -1997,6 +2019,7 @@ export function getPublicAdminSettings(): PublicAdminSettings {
     openaiOAuthProxyDisplay: redactProxyUrl(settings.openaiOAuthProxyUrl),
     imageModel: settings.imageModel,
     imageConcurrency: settings.imageConcurrency,
+    upstreamImageMaxInflight: resolveUpstreamImageMaxInflight(),
     imageRetentionDays: getImageRetentionDaysSetting(),
     promptOptimizerModel: promptOptimizer.model,
     siteTitle: site.siteTitle,
@@ -2615,7 +2638,11 @@ export function markTaskSucceeded(taskId: string, imageCount: number): void {
   upsertUsageDaily({ succeeded: 1, failed: 0, images: imageCount, cost: task.cost_estimate });
 }
 
-export function markTaskFailed(taskId: string, message: string): void {
+/**
+ * @param message 面向用户的短文案，会同时写进会话流。
+ * @param detail 面向管理员的详情（状态码 + 上游原文），只落 error_detail，不进会话流。
+ */
+export function markTaskFailed(taskId: string, message: string, detail: string | null = null): void {
   const task = getGenerationTask(taskId);
   if (!task) {
     return;
@@ -2623,9 +2650,9 @@ export function markTaskFailed(taskId: string, message: string): void {
 
   const result = getDb()
     .prepare(
-      "UPDATE generation_tasks SET status = 'failed', progress_stage = 'failed', completed_at = ?, error_message = ? WHERE id = ? AND status = 'processing'",
+      "UPDATE generation_tasks SET status = 'failed', progress_stage = 'failed', completed_at = ?, error_message = ?, error_detail = ? WHERE id = ? AND status = 'processing'",
     )
-    .run(nowIso(), message.slice(0, 1000), taskId);
+    .run(nowIso(), message.slice(0, 1000), detail ? detail.slice(0, 2000) : null, taskId);
 
   if (result.changes !== 1) {
     return;
@@ -2714,6 +2741,83 @@ function upsertUsageDaily(input: { succeeded: number; failed: number; images: nu
     `,
     )
     .run(date, input.succeeded, input.failed, input.images, input.cost);
+}
+
+export interface RecordGenerationAttemptInput {
+  taskId: string | null;
+  channelId: string | null;
+  channelName: string | null;
+  /** HTTP 状态码；网络错误 / 超时没有状态码时传 null。 */
+  statusCode: number | null;
+  ok: boolean;
+  durationMs: number;
+  /** 失败原因，优先用管理员详情；成功时传 null。 */
+  errorMessage: string | null;
+  startedAt?: string;
+}
+
+const generationAttemptMessageLimit = 500;
+// 聚合时最多回看多少条记录：7 天窗口在高峰期也不会把整张表读进内存。
+const attemptStatsScanLimit = 20_000;
+
+/** 记一条上游 n=1 请求的调用结果。调用方负责吞掉异常，遥测不该拖垮生成主流程。 */
+export function recordGenerationAttempt(input: RecordGenerationAttemptInput): void {
+  getDb()
+    .prepare(
+      `
+      INSERT INTO generation_attempts (
+        id, task_id, channel_id, channel_name, status_code, ok, duration_ms, error_message, started_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `,
+    )
+    .run(
+      createId("att"),
+      input.taskId,
+      input.channelId,
+      input.channelName,
+      input.statusCode,
+      input.ok ? 1 : 0,
+      Math.max(0, Math.round(input.durationMs)),
+      input.errorMessage ? input.errorMessage.slice(0, generationAttemptMessageLimit) : null,
+      input.startedAt ?? nowIso(),
+    );
+}
+
+/** 按渠道汇总最近 windowHours 小时的上游调用：请求数、成功率、p50/p95、失败原因 Top3。 */
+export function listRecentAttemptStats(windowHours: number): ChannelAttemptStats[] {
+  const hours = Number.isFinite(windowHours) && windowHours > 0 ? windowHours : 24;
+  const since = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+  const rows = castRows<GenerationAttemptRow>(
+    getDb()
+      .prepare(
+        `
+      SELECT id, task_id, channel_id, channel_name, status_code, ok, duration_ms, error_message, started_at
+      FROM generation_attempts
+      WHERE started_at >= ?
+      ORDER BY started_at DESC
+      LIMIT ?
+    `,
+      )
+      .all(since, attemptStatsScanLimit),
+  );
+
+  const samples: AttemptSample[] = rows.map((row) => ({
+    channelId: row.channel_id,
+    channelName: row.channel_name,
+    ok: row.ok === 1,
+    durationMs: row.duration_ms,
+    errorMessage: row.error_message,
+    startedAt: row.started_at,
+  }));
+  return summarizeAttemptsByChannel(samples);
+}
+
+/** 遥测只服务于「最近怎么样」，过期记录直接删掉，避免表无限增长。 */
+export function pruneGenerationAttempts(retentionDays: number): number {
+  const days = Number.isFinite(retentionDays) && retentionDays > 0 ? retentionDays : 30;
+  const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  const result = getDb().prepare("DELETE FROM generation_attempts WHERE started_at < ?").run(cutoff);
+  return Number(result.changes ?? 0);
 }
 
 export function createGeneratedImage(input: {
@@ -3367,6 +3471,11 @@ export function getAdminStats(): AdminStats {
       failureRate,
       availabilityRate: weekTotal > 0 ? Number((100 - failureRate).toFixed(1)) : 100,
       weekTimeoutTasks: timeoutRow?.count ?? 0,
+      upstreamMaxInflight: resolveUpstreamImageMaxInflight(),
+    },
+    channelHealth: {
+      last24h: listRecentAttemptStats(24),
+      last7d: listRecentAttemptStats(24 * 7),
     },
     topErrors,
     userSuccessRanking,
@@ -3390,7 +3499,19 @@ function publicProgressStage(row: GenerationTaskRow): TaskProgressStage {
   return "generating";
 }
 
-export function toPublicTask(row: GenerationTaskRow, images: GeneratedImageRow[] = []): PublicTask {
+export interface PublicTaskOptions {
+  /**
+   * 是否下发 errorDetail（管理员详情，含状态码与上游原文）。
+   * 默认 false：普通用户接口不该看到上游原文，调用点不用逐个改。
+   */
+  includeErrorDetail?: boolean;
+}
+
+export function toPublicTask(
+  row: GenerationTaskRow,
+  images: GeneratedImageRow[] = [],
+  options: PublicTaskOptions = {},
+): PublicTask {
   return {
     id: row.id,
     userId: row.user_id,
@@ -3422,6 +3543,7 @@ export function toPublicTask(row: GenerationTaskRow, images: GeneratedImageRow[]
     styleStrength: row.style_strength,
     costEstimate: row.cost_estimate,
     errorMessage: row.error_message,
+    errorDetail: options.includeErrorDetail ? row.error_detail : null,
     createdAt: row.created_at,
     startedAt: row.started_at,
     completedAt: row.completed_at,

@@ -1,5 +1,6 @@
 import { appConfig } from "../lib/config";
 import * as db from "../lib/db";
+import { cleanupExpiredSessions, pruneGenerationAttempts } from "../lib/db";
 import { cleanupExpiredGeneratedImages } from "../lib/image-cleanup";
 import { fillProcessingSlots, inFlightTaskCount, onSlotFreed } from "../lib/queue";
 
@@ -7,13 +8,11 @@ const cleanupIntervalMs = 60 * 60 * 1000;
 const reclaimIntervalMs = 60 * 1000;
 const sessionCleanupIntervalMs = 24 * 60 * 60 * 1000;
 const staleProcessingMaxAgeMinutes = 30;
-const defaultPollIntervalMs = 1_000;
+const attemptRetentionDays = 30;
 
-// 有槽位释放就立刻补位，因此轮询只是兜底，间隔可以压到 1s。
-// 显式配置 WORKER_POLL_INTERVAL_MS 时仍然以配置为准。
-const pollIntervalMs = process.env.WORKER_POLL_INTERVAL_MS
-  ? appConfig.workerPollIntervalMs
-  : defaultPollIntervalMs;
+// 有槽位释放就立刻补位，因此轮询只是兜底；默认 1s 由 appConfig 提供，
+// 显式配置 WORKER_POLL_INTERVAL_MS 时以配置为准。
+const pollIntervalMs = appConfig.workerPollIntervalMs;
 
 let wakeUp: (() => void) | null = null;
 let wakeRequested = false;
@@ -79,10 +78,14 @@ async function main(): Promise<void> {
       }
       if (Date.now() - lastSessionCleanupAt > sessionCleanupIntervalMs) {
         lastSessionCleanupAt = Date.now();
-        // cleanupExpiredSessions 由 lib/db 提供；用可选调用是为了兼容还没合入该函数的分支。
-        const removedSessions = (db as { cleanupExpiredSessions?: () => number }).cleanupExpiredSessions?.();
-        if (removedSessions) {
+        const removedSessions = cleanupExpiredSessions();
+        if (removedSessions > 0) {
           console.log(`cleaned ${removedSessions} expired session(s)`);
+        }
+        // 上游调用遥测只服务于「最近怎么样」，顺手把过期记录删掉，别让表无限长。
+        const prunedAttempts = pruneGenerationAttempts(attemptRetentionDays);
+        if (prunedAttempts > 0) {
+          console.log(`pruned ${prunedAttempts} generation attempt record(s) older than ${attemptRetentionDays}d`);
         }
       }
       if (Date.now() - lastCleanupAt > cleanupIntervalMs) {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import Link from "next/link";
 import {
   Activity,
@@ -15,7 +15,7 @@ import {
   Users,
 } from "lucide-react";
 import clsx from "clsx";
-import type { AdminStats } from "@/lib/types";
+import type { AdminStats, ChannelAttemptStats } from "@/lib/types";
 import { apiJson } from "@/components/client-api";
 import { AdminShell } from "./AdminShell";
 
@@ -38,14 +38,29 @@ const emptyStats: AdminStats = {
     failureRate: 0,
     availabilityRate: 100,
     weekTimeoutTasks: 0,
+    upstreamMaxInflight: 0,
   },
+  channelHealth: { last24h: [], last7d: [] },
   topErrors: [],
   userSuccessRanking: [],
   groupUsage: [],
 };
 
+type ChannelHealthWindow = "last24h" | "last7d";
+
+// 数字列对齐：globals.css 里没有通用的 tabular-nums 工具类，这里就近内联。
+const numericCellStyle: CSSProperties = { fontVariantNumeric: "tabular-nums" };
+
+function formatDurationMs(value: number): string {
+  if (value <= 0) {
+    return "—";
+  }
+  return value >= 1000 ? `${(value / 1000).toFixed(1)}s` : `${value}ms`;
+}
+
 export function AdminOverviewClient() {
   const [stats, setStats] = useState<AdminStats>(emptyStats);
+  const [channelWindow, setChannelWindow] = useState<ChannelHealthWindow>("last24h");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -109,6 +124,34 @@ export function AdminOverviewClient() {
         </Link>
       </section>
 
+      <section className="panel">
+        <div className="panel-header">
+          <div>
+            <h2>生成链路健康</h2>
+            <p>按渠道统计每次上游 n=1 请求的结果，看清是哪个渠道在拖后腿。</p>
+          </div>
+          <div className="segmented two" style={{ maxWidth: "16rem" }}>
+            <button
+              type="button"
+              className={clsx(channelWindow === "last24h" && "active")}
+              onClick={() => setChannelWindow("last24h")}
+            >
+              近 24 小时
+            </button>
+            <button
+              type="button"
+              className={clsx(channelWindow === "last7d" && "active")}
+              onClick={() => setChannelWindow("last7d")}
+            >
+              近 7 天
+            </button>
+          </div>
+        </div>
+        <div className="panel-body">
+          <ChannelHealthTable rows={stats.channelHealth[channelWindow]} />
+        </div>
+      </section>
+
       <div className="admin-dashboard-grid">
         <section className="panel">
           <div className="panel-header">
@@ -131,6 +174,12 @@ export function AdminOverviewClient() {
             <div className="popular-row">
               <strong>模型</strong>
               <span>{stats.health.imageModel}</span>
+            </div>
+            <div className="popular-row">
+              <strong>上游并发上限</strong>
+              <span className="badge" style={numericCellStyle}>
+                IMAGE_UPSTREAM_MAX_INFLIGHT {stats.health.upstreamMaxInflight}
+              </span>
             </div>
             <div className="popular-row">
               <strong>失败率</strong>
@@ -171,6 +220,80 @@ export function AdminOverviewClient() {
         </section>
       </div>
     </AdminShell>
+  );
+}
+
+function ChannelHealthTable({ rows }: { rows: ChannelAttemptStats[] }) {
+  if (rows.length === 0) {
+    return (
+      <div className="empty-state">
+        <span>
+          <strong>暂无上游调用记录</strong>
+          该时间窗口内还没有发起过生成请求。
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="admin-table-wrap">
+      <table className="admin-data-table">
+        <thead>
+          <tr>
+            <th>渠道</th>
+            <th>请求数</th>
+            <th>成功率</th>
+            <th>p50 耗时</th>
+            <th>p95 耗时</th>
+            <th>最近失败原因</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.channelId}>
+              <td>
+                <div className="table-stack">
+                  <strong>{row.channelName}</strong>
+                  <small>{row.channelId}</small>
+                </div>
+              </td>
+              <td style={numericCellStyle}>
+                <div className="table-stack">
+                  <strong>{row.total}</strong>
+                  <small>成功 {row.succeeded} · 失败 {row.failed}</small>
+                </div>
+              </td>
+              <td style={numericCellStyle}>
+                <span
+                  className={clsx(
+                    "badge",
+                    row.successRate >= 95 ? "success" : row.successRate >= 80 ? "warning" : "danger",
+                  )}
+                  style={numericCellStyle}
+                >
+                  {row.successRate}%
+                </span>
+              </td>
+              <td style={numericCellStyle}>{formatDurationMs(row.p50DurationMs)}</td>
+              <td style={numericCellStyle}>{formatDurationMs(row.p95DurationMs)}</td>
+              <td>
+                {row.topErrors.length === 0 ? (
+                  <span className="badge success">无失败</span>
+                ) : (
+                  <div className="table-stack">
+                    {row.topErrors.map((failure) => (
+                      <small key={failure.message}>
+                        <span style={numericCellStyle}>×{failure.count}</span> {failure.message}
+                      </small>
+                    ))}
+                  </div>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 

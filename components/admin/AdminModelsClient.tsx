@@ -153,8 +153,14 @@ export function AdminModelsClient() {
               </select>
             </div>
             <div className="field">
-              <label>并发请求数</label>
+              <label>同时处理的任务数</label>
               <input className="input" type="number" min={imageConcurrencyLimits.min} max={imageConcurrencyLimits.max} value={imageConcurrency} onChange={(event) => setImageConcurrency(Number(event.target.value))} />
+              <span className="field-hint">
+                worker 同时开工的任务上限。单个任务内部还会按张数拆成多个上游请求，真正打到上游的总并发另由
+                IMAGE_UPSTREAM_MAX_INFLIGHT 封顶：当前
+                <strong style={{ fontVariantNumeric: "tabular-nums" }}> {settings?.upstreamImageMaxInflight ?? "—"} </strong>
+                （只读，改环境变量后重启生效）。
+              </span>
             </div>
             <div className="field">
               <label>提示词优化模型</label>

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { runAcrossChannels, runImageGenerationBatches } from "@/lib/image-batch";
+import { isImageTimeoutError, runAcrossChannels, runImageGenerationBatches } from "@/lib/image-batch";
 import { isRetryableImageError, UpstreamImageError } from "@/lib/image-retry";
 
 function isAbort(error: unknown): boolean {
@@ -145,6 +145,112 @@ describe("单渠道批次调度", () => {
     await harness.run({ total: 2, concurrency: 1 });
 
     expect(harness.delivered.join(",")).toBe("a,b");
+  });
+});
+
+describe("超时收敛", () => {
+  test("识别超时：TimeoutError、504/524、含超时字样的文案", () => {
+    expect(isImageTimeoutError(new DOMException("timed out", "TimeoutError"))).toBe(true);
+    expect(isImageTimeoutError(new UpstreamImageError("生成服务响应超时，请稍后重试。", 524))).toBe(true);
+    expect(isImageTimeoutError(new UpstreamImageError("网关超时", 504))).toBe(true);
+    expect(isImageTimeoutError(new UpstreamImageError("模型服务暂时不可用（502）", 502))).toBe(false);
+    expect(isImageTimeoutError(new DOMException("任务已停止", "AbortError"))).toBe(false);
+    expect(isImageTimeoutError(new Error("connect ECONNRESET"))).toBe(false);
+  });
+
+  test("TimeoutError 不在本渠道补发，直接上抛", async () => {
+    const harness = createHarness([
+      async () => {
+        throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+      },
+      async () => {
+        throw new Error("超时后不应该在同一渠道补发");
+      },
+    ]);
+
+    let failure: unknown = null;
+    try {
+      await harness.run({ total: 1, concurrency: 1 });
+    } catch (error) {
+      failure = error;
+    }
+
+    // 只发了 1 个请求：第二个请求应该发生在下一个渠道，而不是这里。
+    expect(harness.requestCount).toBe(1);
+    expect(failure instanceof DOMException).toBe(true);
+    expect((failure as DOMException).name).toBe("TimeoutError");
+  });
+
+  test("超时会切到下一个渠道，而不是在原渠道再烧一个超时窗口", async () => {
+    const attempts: string[] = [];
+    const requestsPerChannel = new Map<string, number>();
+    const delivered: string[] = [];
+
+    await runAcrossChannels({
+      channels: ["渠道一", "渠道二"],
+      run: (channel) => {
+        attempts.push(channel);
+        return runImageGenerationBatches<string>({
+          total: 1,
+          concurrency: 1,
+          delivered: () => delivered.length,
+          request: async () => {
+            const count = (requestsPerChannel.get(channel) ?? 0) + 1;
+            requestsPerChannel.set(channel, count);
+            if (channel === "渠道一") {
+              throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+            }
+            return ["ok"];
+          },
+          deliver: async (image) => {
+            delivered.push(image);
+          },
+          isAbort,
+          isRetryable: isRetryableImageError,
+        });
+      },
+      isAbort,
+      isRetryable: isRetryableImageError,
+      exhaustedMessage: "所有模型渠道均调用失败",
+    });
+
+    expect(attempts.join(",")).toBe("渠道一,渠道二");
+    expect(requestsPerChannel.get("渠道一")).toBe(1);
+    expect(requestsPerChannel.get("渠道二")).toBe(1);
+    expect(delivered.join(",")).toBe("ok");
+  });
+
+  test("非超时的可重试错误仍在本渠道补发一次", async () => {
+    const harness = createHarness([
+      async () => {
+        throw new UpstreamImageError("模型服务暂时不可用（503）", 503);
+      },
+      async () => ["a"],
+    ]);
+
+    await harness.run({ total: 1, concurrency: 1 });
+
+    expect(harness.requestCount).toBe(2);
+    expect(harness.delivered.join(",")).toBe("a");
+  });
+
+  test("超时那批里已经成功交付的图片会保留", async () => {
+    const harness = createHarness([
+      async () => ["a"],
+      async () => {
+        throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+      },
+    ]);
+
+    let failure: unknown = null;
+    try {
+      await harness.run({ total: 2, concurrency: 2 });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(harness.delivered.join(",")).toBe("a");
+    expect((failure as DOMException).name).toBe("TimeoutError");
   });
 });
 

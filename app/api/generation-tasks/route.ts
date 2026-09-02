@@ -20,13 +20,17 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   try {
     const user = requireUser(request);
     const query = listTasksQuerySchema.parse(Object.fromEntries(request.nextUrl.searchParams));
+    const isAdmin = user.role === "admin";
     const rows = listGenerationTasks({
       userId: user.id,
-      isAdmin: user.role === "admin",
+      isAdmin,
       statuses: query.status,
       limit: query.limit,
     });
-    const tasks = rows.map((task) => toPublicTask(task, getTaskImages(task.id)));
+    // 上游原文只给管理员看：普通用户拿到的仍然只有 errorMessage 那句短文案。
+    const tasks = rows.map((task) =>
+      toPublicTask(task, getTaskImages(task.id), { includeErrorDetail: isAdmin }),
+    );
     return NextResponse.json({ tasks });
   } catch (error) {
     return handleRouteError(error);

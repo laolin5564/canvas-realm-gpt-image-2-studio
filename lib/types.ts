@@ -97,9 +97,23 @@ export interface GenerationTaskRow {
   style_strength: number;
   cost_estimate: number;
   error_message: string | null;
+  // 面向管理员的失败详情（状态码 + 上游原文），只在管理员接口里下发。
+  error_detail: string | null;
   created_at: string;
   started_at: string | null;
   completed_at: string | null;
+}
+
+export interface GenerationAttemptRow {
+  id: string;
+  task_id: string | null;
+  channel_id: string | null;
+  channel_name: string | null;
+  status_code: number | null;
+  ok: number;
+  duration_ms: number;
+  error_message: string | null;
+  started_at: string;
 }
 
 export interface GeneratedImageRow {
@@ -303,6 +317,8 @@ export interface PublicTask {
   styleStrength: number;
   costEstimate: number;
   errorMessage: string | null;
+  // 仅管理员可见；非管理员调用方拿到的恒为 null。
+  errorDetail: string | null;
   createdAt: string;
   startedAt: string | null;
   completedAt: string | null;
@@ -411,6 +427,31 @@ export interface PublicTemplate {
   updatedAt: string;
 }
 
+export interface ChannelAttemptFailure {
+  message: string;
+  count: number;
+  lastAt: string;
+}
+
+/** 单个模型渠道在某个时间窗口内的上游调用表现。 */
+export interface ChannelAttemptStats {
+  channelId: string;
+  channelName: string;
+  total: number;
+  succeeded: number;
+  failed: number;
+  /** 0-100，保留一位小数。 */
+  successRate: number;
+  p50DurationMs: number;
+  p95DurationMs: number;
+  topErrors: ChannelAttemptFailure[];
+}
+
+export interface ChannelHealthStats {
+  last24h: ChannelAttemptStats[];
+  last7d: ChannelAttemptStats[];
+}
+
 export interface AdminStats {
   today: {
     totalTasks: number;
@@ -442,7 +483,10 @@ export interface AdminStats {
     failureRate: number;
     availabilityRate: number;
     weekTimeoutTasks: number;
+    /** IMAGE_UPSTREAM_MAX_INFLIGHT：进程级上游请求信号量上限（只读，来自环境变量）。 */
+    upstreamMaxInflight: number;
   };
+  channelHealth: ChannelHealthStats;
   topErrors: Array<{
     message: string;
     count: number;
@@ -471,6 +515,8 @@ export interface PublicAdminSettings {
   openaiOAuthProxyDisplay: string | null;
   imageModel: string;
   imageConcurrency: number;
+  /** 只读：进程级上游并发上限（IMAGE_UPSTREAM_MAX_INFLIGHT），后台仅展示不可改。 */
+  upstreamImageMaxInflight: number;
   imageRetentionDays: number;
   promptOptimizerModel: string;
   siteTitle: string;
