@@ -1,5 +1,8 @@
 import { appConfig } from "./config";
 
+// 老林云侧偶发长时间不响应，超过这个时间就当作网络故障返回，避免请求线程被挂死。
+const laolinyunRequestTimeoutMs = 15_000;
+
 interface LaolinyunApiResponse {
   code?: number | string;
   msg?: string;
@@ -247,13 +250,20 @@ async function requestLaolinyunApi(
     headers["X-Forwarded-For"] = options.clientIp;
   }
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers,
-    body,
-  });
+  let response: Response;
+  let text: string;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers,
+      body,
+      signal: AbortSignal.timeout(laolinyunRequestTimeoutMs),
+    });
+    text = await response.text();
+  } catch (error) {
+    throw toLaolinyunNetworkError(error);
+  }
 
-  const text = await response.text();
   let payload: LaolinyunApiResponse | null = null;
   try {
     payload = JSON.parse(text) as LaolinyunApiResponse;
@@ -334,6 +344,18 @@ class LaolinyunUserApiError extends Error {
 }
 
 export { LaolinyunUserApiError };
+
+// fetch 抛出的原生错误（超时/DNS/连接重置）统一转成中文可读错误。
+export function toLaolinyunNetworkError(error: unknown): LaolinyunUserApiError {
+  if (error instanceof LaolinyunUserApiError) {
+    return error;
+  }
+  const name = error instanceof Error ? error.name : "";
+  if (name === "TimeoutError" || name === "AbortError") {
+    return new LaolinyunUserApiError("老林云接口响应超时，请稍后重试", 504);
+  }
+  return new LaolinyunUserApiError("老林云接口网络异常，请稍后重试", 502);
+}
 
 function toAuthUser(payload: LaolinyunApiResponse, fallbackName: string): LaolinyunAuthUser {
   const secret = typeof payload.data === "string" ? payload.data.trim() : "";
