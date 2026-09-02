@@ -5,8 +5,14 @@ export interface ComposedConversationPrompt {
   messageContent: string;
 }
 
+// 固定提示词经常是多行清单，压缩行内空白但保留换行（最多连续两个换行）。
 export function normalizeConversationFixedPrompt(value: string | null | undefined): string | null {
-  const normalized = value?.replace(/\s+/g, " ").trim();
+  const normalized = value
+    ?.replace(/\r\n?/g, "\n")
+    .replace(/[^\S\n]+/g, " ")
+    .replace(/ *\n */g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
   return normalized && normalized.length > 0 ? normalized : null;
 }
 

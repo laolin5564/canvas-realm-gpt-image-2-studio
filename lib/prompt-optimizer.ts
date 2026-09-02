@@ -3,11 +3,12 @@ import { withOptionalHostHeader } from "./http-host";
 
 export interface PromptOptimizationInput {
   prompt: string;
-  mode: string;
-  sizeLabel: string;
-  templateName: string | null;
-  templateDescription: string | null;
-  variables: Record<string, string>;
+  mode?: string | null;
+  sizeLabel?: string | null;
+  negativePrompt?: string | null;
+  templateName?: string | null;
+  templateDescription?: string | null;
+  variables?: Record<string, string>;
 }
 
 interface ResponsesPayload {
@@ -40,34 +41,61 @@ interface PromptOptimizerRuntimeSettings {
 }
 
 const openAIChatGPTCodexResponsesUrl = "https://chatgpt.com/backend-api/codex/responses";
+const promptOptimizerTimeoutMs = 60_000;
 const openAICodexUserAgent = "codex_cli_rs/0.125.0";
 
-const promptOptimizerSystemPrompt = [
+const promptOptimizerBaseRules = [
   "你是 Canvas Realm Studio 的 GPT-image-2 生产提示词总监。",
   "你的任务是把用户的中文图片生成 prompt 优化成可直接用于生产的最终 prompt。",
-  "只输出 JSON：{\"prompt\":\"...\"}，不要解释，不要 Markdown。",
+  "只输出 JSON：{\"prompt\":\"...\"}，prompt 的值是纯提示词文本，不要解释，不要 Markdown。",
   "优化原则：",
   "1. 保留用户原意，不虚构品牌、产品、人物身份或具体文字。",
-  "2. 把提示词整理为场景、主体、构图、安全区、材质光影、输出约束。",
-  "3. 空变量不要写入最终 prompt，不要出现占位符、变量名或“可为空”。",
-  "4. 电商图强调产品轮廓、材质、真实阴影和干净背景。",
-  "5. 封面图强调标题安全区、主体不要贴边、适合平台信息流裁切。",
-  "6. 海报图强调单一强主视觉、信息层级、色调统一，避免杂乱拼贴。",
-  "7. 避免文字乱码、多余小字、低清晰度、廉价促销感、畸形结构。",
-].join("\n");
+  "2. 空变量不要写入最终 prompt，不要出现占位符、变量名或“可为空”。",
+  "3. 电商图强调产品轮廓、材质、真实阴影和干净背景。",
+  "4. 封面图强调标题安全区、主体不要贴边、适合平台信息流裁切。",
+  "5. 海报图强调单一强主视觉、信息层级、色调统一，避免杂乱拼贴。",
+  "6. 避免文字乱码、多余小字、低清晰度、廉价促销感、畸形结构。",
+];
+
+const textToImageRules = [
+  "本次是文生图：可以把提示词补全为完整画面描述。",
+  "把提示词整理为场景、主体、构图、安全区、材质光影、输出约束。",
+];
+
+// 图生图的 prompt 是「对已有图片的修改指令」，改写成整幅场景描述会让模型重画一张新图。
+const imageToImageRules = [
+  "本次是图生图：用户的 prompt 是对已有参考图的编辑指令，不是一整幅新画面的描述。",
+  "保持编辑指令的语义和作用范围，只把指令表达得更精确（改哪里、改成什么、保留什么）。",
+  "不要把编辑指令改写成完整场景描述，不要补充原图里没有出现的主体、背景或版式。",
+  "明确要求未提及的区域、构图和风格保持与原图一致。",
+];
+
+export function buildPromptOptimizerSystemPrompt(mode?: string | null): string {
+  const modeRules = mode === "image_to_image" || mode === "edit_image" ? imageToImageRules : textToImageRules;
+  return [...promptOptimizerBaseRules, ...modeRules].join("\n");
+}
+
+const generationModeLabels: Record<string, string> = {
+  text_to_image: "文生图（从零生成一张新图）",
+  image_to_image: "图生图（在已有参考图上做编辑）",
+  edit_image: "图生图（在已有参考图上做编辑）",
+};
 
 export function buildPromptOptimizerUserPrompt(input: PromptOptimizationInput): string {
-  const variables = Object.entries(input.variables)
+  const variables = Object.entries(input.variables ?? {})
     .filter(([, value]) => value.trim())
     .map(([key, value]) => `${key}: ${value.trim()}`)
     .join("\n");
+  const mode = input.mode ?? "text_to_image";
+  const negativePrompt = input.negativePrompt?.trim();
 
   return [
-    `生成模式：${input.mode}`,
-    `目标规格：${input.sizeLabel}`,
+    `生成模式：${generationModeLabels[mode] ?? mode}`,
+    `目标规格：${input.sizeLabel?.trim() || "不限制"}`,
     input.templateName ? `生产模板：${input.templateName}` : "",
     input.templateDescription ? `模板说明：${input.templateDescription}` : "",
     variables ? `已填写变量：\n${variables}` : "",
+    negativePrompt ? `需要规避的内容（不要写进最终 prompt，只用于约束表达）：\n${negativePrompt}` : "",
     "当前 prompt：",
     input.prompt,
   ].filter(Boolean).join("\n\n");
@@ -115,15 +143,17 @@ function extractTextPayload(payload: unknown): string {
 export async function optimizePromptWithModel(input: PromptOptimizationInput): Promise<string> {
   const settings = await resolvePromptOptimizerRuntimeSettings();
   const userPrompt = buildPromptOptimizerUserPrompt(input);
+  const systemPrompt = buildPromptOptimizerSystemPrompt(input.mode);
 
   if (settings.provider === "openai_oauth") {
-    return requestOpenAIOAuthPromptOptimization(settings, userPrompt);
+    return requestOpenAIOAuthPromptOptimization(settings, systemPrompt, userPrompt);
   }
 
   const responsesError = await requestResponsesApi(
     settings.baseUrl,
     settings.model,
     settings.bearerToken,
+    systemPrompt,
     userPrompt,
     settings.hostHeader,
   )
@@ -148,6 +178,7 @@ export async function optimizePromptWithModel(input: PromptOptimizationInput): P
     settings.baseUrl,
     settings.model,
     settings.bearerToken,
+    systemPrompt,
     userPrompt,
     settings.hostHeader,
   );
@@ -235,10 +266,11 @@ async function requestResponsesApi(
   baseUrl: string,
   model: string,
   apiKey: string,
+  systemPrompt: string,
   userPrompt: string,
   hostHeader?: string,
 ): Promise<unknown> {
-  const response = await fetch(`${baseUrl}/responses`, {
+  const response = await fetchOptimizer(`${baseUrl}/responses`, {
     method: "POST",
     headers: withOptionalHostHeader({
       Authorization: `Bearer ${apiKey}`,
@@ -247,7 +279,7 @@ async function requestResponsesApi(
     body: JSON.stringify({
       model,
       input: [
-        { role: "system", content: [{ type: "input_text", text: promptOptimizerSystemPrompt }] },
+        { role: "system", content: [{ type: "input_text", text: systemPrompt }] },
         { role: "user", content: [{ type: "input_text", text: userPrompt }] },
       ],
     }),
@@ -259,10 +291,11 @@ async function requestChatCompletionsApi(
   baseUrl: string,
   model: string,
   apiKey: string,
+  systemPrompt: string,
   userPrompt: string,
   hostHeader?: string,
 ): Promise<unknown> {
-  const response = await fetch(`${baseUrl}/chat/completions`, {
+  const response = await fetchOptimizer(`${baseUrl}/chat/completions`, {
     method: "POST",
     headers: withOptionalHostHeader({
       Authorization: `Bearer ${apiKey}`,
@@ -271,7 +304,7 @@ async function requestChatCompletionsApi(
     body: JSON.stringify({
       model,
       messages: [
-        { role: "system", content: promptOptimizerSystemPrompt },
+        { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ],
       temperature: 0.25,
@@ -280,8 +313,26 @@ async function requestChatCompletionsApi(
   return readOptimizerResponse(response, "Chat Completions");
 }
 
+// 提示词优化是前台同步等待的调用，超过一分钟直接判失败，别让页面一直转圈。
+async function fetchOptimizer(url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, { ...init, signal: AbortSignal.timeout(promptOptimizerTimeoutMs) });
+  } catch (error) {
+    throw toPromptOptimizerNetworkError(error);
+  }
+}
+
+function toPromptOptimizerNetworkError(error: unknown): Error {
+  const name = error instanceof Error ? error.name : "";
+  if (name === "TimeoutError" || name === "AbortError") {
+    return new Error("提示词优化超时，请稍后重试或直接使用当前提示词。");
+  }
+  return error instanceof Error ? error : new Error("提示词优化调用失败");
+}
+
 async function requestOpenAIOAuthPromptOptimization(
   settings: PromptOptimizerRuntimeSettings,
+  systemPrompt: string,
   userPrompt: string,
 ): Promise<string> {
   const { fetchWithOptionalProxy } = await import("./proxy");
@@ -300,8 +351,9 @@ async function requestOpenAIOAuthPromptOptimization(
   const response = await fetchWithOptionalProxy(openAIChatGPTCodexResponsesUrl, {
     method: "POST",
     headers,
+    signal: AbortSignal.timeout(promptOptimizerTimeoutMs),
     body: JSON.stringify({
-      instructions: promptOptimizerSystemPrompt,
+      instructions: systemPrompt,
       stream: true,
       reasoning: { effort: "medium", summary: "auto" },
       parallel_tool_calls: true,

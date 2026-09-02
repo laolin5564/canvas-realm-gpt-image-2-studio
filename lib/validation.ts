@@ -16,6 +16,14 @@ const nullableString = z
   .union([z.string(), z.null(), z.undefined()])
   .transform((value) => (value && value.trim() !== "" ? value.trim() : null));
 
+// 参考图上限：工作台与会话续图两条链路必须一致。
+export const maxReferenceImageCount = 4;
+
+const referenceImageIdsSchema = z
+  .array(z.string().trim().min(1, "参考图 ID 不能为空"))
+  .max(maxReferenceImageCount, `参考图最多 ${maxReferenceImageCount} 张`)
+  .optional();
+
 const templateVariableOptionSchema = z.object({
   label: z.string().trim().min(1).max(40),
   value: z.string().trim().min(1).max(120),
@@ -43,7 +51,7 @@ export const createGenerationTaskSchema = z
     requestedConcurrency: z.union([z.literal(1), z.null()]).optional(),
     templateId: nullableString,
     sourceImageId: nullableString,
-    sourceImageIds: z.array(z.string()).max(4).optional(),
+    sourceImageIds: referenceImageIdsSchema,
     conversationId: nullableString,
     applyFixedPrompt: z.boolean().optional().default(true),
     referenceStrength: z.coerce.number().min(0).max(1).default(0.6),
@@ -187,7 +195,7 @@ export const continueConversationSchema = z.object({
   negativePrompt: nullableString,
   sourceImageId: nullableString,
   referenceImageId: nullableString,
-  referenceImageIds: z.array(z.string()).max(4).optional(),
+  referenceImageIds: referenceImageIdsSchema,
   size: z.enum(sizeOptions).default("auto"),
   quality: z.enum(imageQualityOptions).default("high"),
   quantity: z.union([z.literal(1), z.literal(2), z.literal(4)]).default(1),
@@ -214,11 +222,12 @@ export const createTemplateFromConversationPromptSchema = z.object({
 
 export const optimizePromptSchema = z.object({
   prompt: z.string().trim().min(1, "prompt 不能为空").max(8000),
-  mode: z.enum(generationModes).default("text_to_image"),
-  sizeLabel: z.string().trim().max(80).default("不限制"),
+  mode: z.enum(generationModes).optional().default("text_to_image"),
+  sizeLabel: z.string().trim().max(80).optional().default("不限制"),
+  negativePrompt: nullableString,
   templateName: nullableString,
   templateDescription: nullableString,
-  variables: z.record(z.string().trim().max(80), z.string().trim().max(1000)).default({}),
+  variables: z.record(z.string().trim().max(80), z.string().trim().max(1000)).optional().default({}),
 });
 
 export const qrLoginStatusSchema = z.object({

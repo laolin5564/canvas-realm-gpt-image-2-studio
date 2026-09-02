@@ -29,6 +29,17 @@ services:
     volumes:
       - ./data:/app/data
     restart: unless-stopped
+    # Web 或 worker 任一进程挂掉，容器会整体退出并被 restart 策略拉起；健康检查负责发现「进程还在但服务不可用」。
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "const p=process.env.PORT||3000;const r=require('http').get({host:'127.0.0.1',port:p,path:'/api/site-settings',timeout:8000},(res)=>{res.resume();process.exit(res.statusCode&&res.statusCode<500?0:1)});r.on('timeout',()=>{r.destroy();process.exit(1)});r.on('error',()=>process.exit(1))"
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
 
   # 国内图床直连 TLS 入口（https://imgd.laolin.ai:18443 -> 127.0.0.1:3010）。
   # 证书由美西机 acme.sh 自动续期并推送到 ./certs/（deploy-imgd-to-nas.sh）。

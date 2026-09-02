@@ -40,4 +40,9 @@ RUN mkdir -p /app/data/images
 
 EXPOSE 3000
 
-CMD ["sh", "-c", "node_modules/.bin/next start -p ${PORT:-3000} & node --import tsx workers/image-worker.ts"]
+# 容器自愈：Web 与 worker 任一进程退出，就整个容器退出，交给 restart 策略重启。
+# 基础镜像是 node:25-bookworm-slim（Debian），/bin/sh 是 dash，`wait -n` 支持不稳，固定用 bash。
+CMD ["bash", "-c", "node_modules/.bin/next start -p ${PORT:-3000} & WEB=$!; node --import tsx workers/image-worker.ts & WK=$!; wait -n; kill $WEB $WK 2>/dev/null; exit 1"]
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+  CMD node -e "const p=process.env.PORT||3000;const r=require('http').get({host:'127.0.0.1',port:p,path:'/api/site-settings',timeout:8000},(res)=>{res.resume();process.exit(res.statusCode&&res.statusCode<500?0:1)});r.on('timeout',()=>{r.destroy();process.exit(1)});r.on('error',()=>process.exit(1))"

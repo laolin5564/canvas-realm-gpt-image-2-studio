@@ -76,11 +76,17 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
     assertQuotaAvailable(user, input.quantity);
 
+    // 主图之外的参考图；referenceImageId 是「第一张额外参考图」，与会话续图路由保持一致。
+    const referenceImageIds = Array.from(
+      new Set((input.sourceImageIds ?? []).filter((imageId) => imageId !== input.sourceImageId)),
+    );
+
     const task = createGenerationTask({
       ...input,
       mode: input.mode === "edit_image" ? "image_to_image" : input.mode,
       userId: user.id,
-      referenceImageIds: (input.sourceImageIds ?? []).filter((imageId) => imageId !== input.sourceImageId),
+      referenceImageId: referenceImageIds[0] ?? null,
+      referenceImageIds,
     });
     return NextResponse.json(
       {
