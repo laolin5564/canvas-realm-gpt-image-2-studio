@@ -58,6 +58,7 @@ function task(overrides: Partial<PublicTask> = {}): PublicTask {
     styleStrength: 0.7,
     costEstimate: 0,
     errorMessage: null,
+    errorDetail: null,
     createdAt: "2026-09-02T00:00:00.000Z",
     startedAt: "2026-09-02T00:00:10.000Z",
     completedAt: null,
