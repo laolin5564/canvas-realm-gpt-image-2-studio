@@ -1,12 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
+  conversationDetailEtag,
   getConversation,
+  getTaskImagesByTaskIds,
   deleteConversationWithGeneratedImages,
   listConversationMessages,
   listConversationTasks,
   toPublicConversation,
   updateConversationFixedPrompt,
 } from "@/lib/db";
+import type { ConversationRow, PublicConversation } from "@/lib/types";
 import { requireUser } from "@/lib/auth";
 import { handleRouteError, jsonError } from "@/lib/http";
 import { assertConversationAccess } from "@/lib/permissions";
@@ -15,6 +18,37 @@ import { updateConversationFixedPromptSchema } from "@/lib/validation";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+interface ConversationDetail {
+  conversation: PublicConversation;
+  etag: string;
+}
+
+/**
+ * 一次性把消息、任务、以及所有任务的出图取出来（出图走 getTaskImagesByTaskIds 批量查，
+ * 不再逐任务 getTaskImages），顺便算出这份详情的弱 ETag。
+ */
+function buildConversationDetail(row: ConversationRow): ConversationDetail {
+  const messages = listConversationMessages(row.id);
+  const tasks = listConversationTasks(row.id);
+  const taskImages = getTaskImagesByTaskIds(tasks.map((task) => task.id));
+  return {
+    conversation: toPublicConversation(row, { messages, tasks, taskImages }),
+    etag: conversationDetailEtag({ conversation: row, messages, tasks, taskImages }),
+  };
+}
+
+/** If-None-Match 支持逗号分隔的多个值与 `*`；弱校验，比较时忽略 W/ 前缀。 */
+function ifNoneMatchSatisfied(header: string | null, etag: string): boolean {
+  if (!header) {
+    return false;
+  }
+  const normalize = (value: string): string => value.trim().replace(/^W\//, "");
+  const target = normalize(etag);
+  return header
+    .split(",")
+    .some((candidate) => candidate.trim() === "*" || normalize(candidate) === target);
+}
 
 export async function GET(
   request: NextRequest,
@@ -29,12 +63,13 @@ export async function GET(
     }
     assertConversationAccess(user, conversation);
 
-    return NextResponse.json({
-      conversation: toPublicConversation(conversation, {
-        messages: listConversationMessages(id),
-        tasks: listConversationTasks(id),
-      }),
-    });
+    const detail = buildConversationDetail(conversation);
+    const headers = { ETag: detail.etag, "Cache-Control": "private, no-cache" };
+    if (ifNoneMatchSatisfied(request.headers.get("if-none-match"), detail.etag)) {
+      return new NextResponse(null, { status: 304, headers });
+    }
+
+    return NextResponse.json({ conversation: detail.conversation }, { headers });
   } catch (error) {
     return handleRouteError(error);
   }
@@ -63,12 +98,11 @@ export async function PATCH(
       fixedPrompt: input.fixedPrompt,
     });
 
-    return NextResponse.json({
-      conversation: toPublicConversation(updated, {
-        messages: listConversationMessages(id),
-        tasks: listConversationTasks(id),
-      }),
-    });
+    const detail = buildConversationDetail(updated);
+    return NextResponse.json(
+      { conversation: detail.conversation },
+      { headers: { ETag: detail.etag, "Cache-Control": "private, no-cache" } },
+    );
   } catch (error) {
     return handleRouteError(error);
   }

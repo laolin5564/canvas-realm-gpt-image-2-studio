@@ -49,6 +49,17 @@ import type {
 } from "./types";
 
 let db: DatabaseSync | null = null;
+// 建连时才跑一次建表 / 补列 / 内置模板写入；之后每次 getDb() 只复用连接。
+let schemaReady = false;
+
+// web 与 worker 是两个进程写同一个 SQLite 文件，没有 busy_timeout 时写冲突会立刻抛
+// "database is locked"；给锁等待留 5 秒，绝大多数瞬时冲突会自行让开。
+const busyTimeoutMs = 5000;
+
+// 单个任务最多展示/统计多少张出图（与 generated_images 的每任务上限保持一致）。
+const taskImageLimit = 20;
+const conversationMessageLimit = 200;
+const conversationTaskLimit = 100;
 
 export interface CreateTaskInput {
   userId: string | null;
@@ -429,17 +440,28 @@ function castRow<T>(row: unknown): T | null {
 }
 
 export function getDb(): DatabaseSync {
-  if (db) {
-    initializeSchema(db);
+  if (db && schemaReady) {
     return db;
   }
 
-  mkdirSync(path.dirname(appConfig.databasePath), { recursive: true });
-  db = new DatabaseSync(appConfig.databasePath);
-  db.exec("PRAGMA journal_mode = WAL;");
-  db.exec("PRAGMA foreign_keys = ON;");
-  initializeSchema(db);
-  seedTemplates(db);
+  if (!db) {
+    mkdirSync(path.dirname(appConfig.databasePath), { recursive: true });
+    db = new DatabaseSync(appConfig.databasePath);
+    db.exec("PRAGMA journal_mode = WAL;");
+    db.exec("PRAGMA foreign_keys = ON;");
+    db.exec(`PRAGMA busy_timeout = ${busyTimeoutMs};`);
+  }
+
+  // 先置位再初始化：initializeSchema / seedTemplates 内部若间接调用 getDb()，
+  // 拿到的是同一个连接而不会递归重跑 DDL。
+  schemaReady = true;
+  try {
+    initializeSchema(db);
+    seedTemplates(db);
+  } catch (error) {
+    schemaReady = false;
+    throw error;
+  }
   return db;
 }
 
@@ -528,6 +550,12 @@ function initializeSchema(database: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_generated_images_template
       ON generated_images (template_id);
 
+    CREATE INDEX IF NOT EXISTS idx_generated_images_task
+      ON generated_images (task_id, created_at);
+
+    CREATE INDEX IF NOT EXISTS idx_generated_images_file_path
+      ON generated_images (file_path);
+
     CREATE TABLE IF NOT EXISTS source_images (
       id TEXT PRIMARY KEY,
       user_id TEXT,
@@ -538,6 +566,9 @@ function initializeSchema(database: DatabaseSync): void {
       mime_type TEXT,
       created_at TEXT NOT NULL
     );
+
+    CREATE INDEX IF NOT EXISTS idx_source_images_file_path
+      ON source_images (file_path);
 
     CREATE TABLE IF NOT EXISTS canvas_projects (
       id TEXT PRIMARY KEY,
@@ -717,6 +748,9 @@ function initializeSchema(database: DatabaseSync): void {
   ensureColumn(database, "generation_tasks", "quality", "TEXT");
   ensureColumn(database, "generation_tasks", "reference_image_id", "TEXT");
   ensureColumn(database, "generation_tasks", "reference_image_ids", "TEXT");
+  if (ensureColumn(database, "generation_tasks", "image_count", "INTEGER NOT NULL DEFAULT 0")) {
+    backfillTaskImageCount(database);
+  }
   ensureColumn(database, "templates", "owner_user_id", "TEXT");
   ensureColumn(database, "templates", "template_variables", "TEXT");
   ensureColumn(database, "source_images", "user_id", "TEXT");
@@ -749,11 +783,34 @@ function initializeSchema(database: DatabaseSync): void {
   seedDefaultGroups(database);
 }
 
-function ensureColumn(database: DatabaseSync, tableName: string, columnName: string, definition: string): void {
+function ensureColumn(
+  database: DatabaseSync,
+  tableName: string,
+  columnName: string,
+  definition: string,
+): boolean {
   const columns = castRows<{ name: string }>(database.prepare(`PRAGMA table_info(${tableName})`).all());
-  if (!columns.some((column) => column.name === columnName)) {
-    database.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+  if (columns.some((column) => column.name === columnName)) {
+    return false;
   }
+  database.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+  return true;
+}
+
+// generation_tasks.image_count 是「这个任务真实出过几张图」的常驻计数：
+// 会话被删、保留期清理把 generated_images 行删掉之后，计费仍以它为准，不会退额。
+// 只在刚补上这一列时回填一次。
+function backfillTaskImageCount(database: DatabaseSync): void {
+  database.exec(`
+    UPDATE generation_tasks
+    SET image_count = (
+      SELECT COUNT(*) FROM generated_images gi WHERE gi.task_id = generation_tasks.id
+    );
+
+    UPDATE generation_tasks
+    SET image_count = quantity
+    WHERE status = 'succeeded' AND image_count = 0;
+  `);
 }
 
 function seedDefaultGroups(database: DatabaseSync): void {
@@ -810,7 +867,7 @@ export function listUserGroupsWithStats(): UserGroupWithStats[] {
           ug.*,
           COUNT(u.id) AS member_count,
           SUM(CASE WHEN u.status = 'active' THEN 1 ELSE 0 END) AS active_member_count,
-          COALESCE(SUM(CASE WHEN gt.status != 'failed' THEN gt.quantity ELSE 0 END), 0) AS month_used
+          COALESCE(SUM(${billedImageCountSql("gt")}), 0) AS month_used
         FROM user_groups ug
         LEFT JOIN users u ON u.group_id = ug.id
         LEFT JOIN generation_tasks gt ON gt.user_id = u.id AND gt.created_at >= ?
@@ -1151,7 +1208,13 @@ export function deleteSessionByTokenHash(tokenHash: string): void {
 }
 
 export function deleteExpiredSessions(): void {
-  getDb().prepare("DELETE FROM sessions WHERE expires_at <= ?").run(nowIso());
+  cleanupExpiredSessions();
+}
+
+/** 清掉过期会话行，返回删除条数（供 worker 定期调用）。 */
+export function cleanupExpiredSessions(): number {
+  const result = getDb().prepare("DELETE FROM sessions WHERE expires_at <= ?").run(nowIso());
+  return Number(result.changes ?? 0);
 }
 
 export function monthStartIso(date = new Date()): string {
@@ -1161,14 +1224,30 @@ export function monthStartIso(date = new Date()): string {
   return start.toISOString();
 }
 
+/**
+ * 计费口径：按「真实出图张数」算，未落地的失败/取消部分不计费。
+ * - 已结束的任务（succeeded / failed / 取消）：算 image_count，即真实落库过几张。
+ * - 仍在 queued / processing 的任务：按 quantity 预占，防止用户连续提交跑超额度；
+ *   已出的那几张已经计入 image_count，所以取 MAX 而不是相加，避免中途重复计。
+ *
+ * `alias` 用于带 JOIN 的聚合语句（传 "gt" 之类的表别名）。
+ */
+function billedImageCountSql(alias = ""): string {
+  const prefix = alias ? `${alias}.` : "";
+  return `CASE WHEN ${prefix}status IN ('queued', 'processing')
+      THEN MAX(${prefix}quantity, ${prefix}image_count)
+      ELSE ${prefix}image_count
+    END`;
+}
+
 export function getUserMonthImageUsage(userId: string): number {
   const row = castRow<{ count: number | null }>(
     getDb()
       .prepare(
         `
-        SELECT COALESCE(SUM(quantity), 0) AS count
+        SELECT COALESCE(SUM(${billedImageCountSql()}), 0) AS count
         FROM generation_tasks
-        WHERE user_id = ? AND created_at >= ? AND status != 'failed'
+        WHERE user_id = ? AND created_at >= ?
       `,
       )
       .get(userId, monthStartIso()),
@@ -2148,20 +2227,28 @@ export function getConversationMessage(id: string): ConversationMessageRow | nul
   );
 }
 
+/** 取最新 N 条消息（先 DESC 截断再翻回时间升序），长会话不会只看到最早那一页。 */
 export function listConversationMessages(conversationId: string): ConversationMessageRow[] {
-  return castRows<ConversationMessageRow>(
+  const rows = castRows<ConversationMessageRow>(
     getDb()
-      .prepare("SELECT * FROM conversation_messages WHERE conversation_id = ? ORDER BY created_at ASC LIMIT 200")
-      .all(conversationId),
+      .prepare(
+        "SELECT * FROM conversation_messages WHERE conversation_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?",
+      )
+      .all(conversationId, conversationMessageLimit),
   );
+  return rows.reverse();
 }
 
+/** 取最新 N 个任务（先 DESC 截断再翻回时间升序）。 */
 export function listConversationTasks(conversationId: string): GenerationTaskRow[] {
-  return castRows<GenerationTaskRow>(
+  const rows = castRows<GenerationTaskRow>(
     getDb()
-      .prepare("SELECT * FROM generation_tasks WHERE conversation_id = ? ORDER BY created_at ASC LIMIT 100")
-      .all(conversationId),
+      .prepare(
+        "SELECT * FROM generation_tasks WHERE conversation_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?",
+      )
+      .all(conversationId, conversationTaskLimit),
   );
+  return rows.reverse();
 }
 
 export function deleteConversationWithGeneratedImages(conversationId: string): {
@@ -2207,7 +2294,12 @@ export function deleteConversationWithGeneratedImages(conversationId: string): {
       `,
       )
       .run(conversationId);
-    database.prepare("DELETE FROM generation_tasks WHERE conversation_id = ?").run(conversationId);
+    // 任务行保留、只解绑会话：出图张数记在 generation_tasks.image_count 上，
+    // 删掉任务行等于把本月已消耗的额度退还给用户。解绑后这些任务不再属于任何会话，
+    // 会话列表/详情与历史页都不会再展示它们。
+    database
+      .prepare("UPDATE generation_tasks SET conversation_id = NULL WHERE conversation_id = ?")
+      .run(conversationId);
     database.prepare("DELETE FROM conversations WHERE id = ?").run(conversationId);
     database.exec("COMMIT");
   } catch (error) {
@@ -2252,11 +2344,11 @@ export function getConversationImageMap(conversationId: string): Map<string, Gen
         FROM generated_images gi
         INNER JOIN generation_tasks gt ON gt.id = gi.task_id
         WHERE gt.conversation_id = ?
-        ORDER BY gi.created_at ASC
-        LIMIT 200
+        ORDER BY gi.created_at DESC, gi.rowid DESC
+        LIMIT ?
       `,
       )
-      .all(conversationId),
+      .all(conversationId, conversationMessageLimit),
   );
   return new Map(rows.map((image) => [image.id, image]));
 }
@@ -2376,9 +2468,43 @@ export function getGenerationTask(id: string): GenerationTaskRow | null {
 export function getTaskImages(taskId: string): GeneratedImageRow[] {
   return castRows<GeneratedImageRow>(
     getDb()
-      .prepare("SELECT * FROM generated_images WHERE task_id = ? ORDER BY created_at ASC LIMIT 20")
-      .all(taskId),
+      .prepare("SELECT * FROM generated_images WHERE task_id = ? ORDER BY created_at ASC, rowid ASC LIMIT ?")
+      .all(taskId, taskImageLimit),
   );
+}
+
+/**
+ * 一次查出多个任务的出图并按 task_id 分组，替代会话详情里逐任务 getTaskImages 的 N+1。
+ * 传入的每个 id 都会有一项（没有出图时是空数组）。
+ */
+export function getTaskImagesByTaskIds(taskIds: string[]): Map<string, GeneratedImageRow[]> {
+  const safeIds = uniqueIds(taskIds);
+  const grouped = new Map<string, GeneratedImageRow[]>(safeIds.map((id) => [id, []]));
+  if (safeIds.length === 0) {
+    return grouped;
+  }
+
+  const placeholders = safeIds.map(() => "?").join(", ");
+  const rows = castRows<GeneratedImageRow>(
+    getDb()
+      .prepare(
+        `
+        SELECT * FROM generated_images
+        WHERE task_id IN (${placeholders})
+        ORDER BY task_id ASC, created_at ASC, rowid ASC
+        LIMIT ${safeIds.length * taskImageLimit}
+      `,
+      )
+      .all(...safeIds),
+  );
+
+  for (const row of rows) {
+    const list = grouped.get(row.task_id);
+    if (list && list.length < taskImageLimit) {
+      list.push(row);
+    }
+  }
+  return grouped;
 }
 
 export function claimNextQueuedTask(): GenerationTaskRow | null {
@@ -2428,6 +2554,25 @@ export function claimQueuedTasks(limit: number): GenerationTaskRow[] {
   }
 }
 
+/**
+ * 把 image_count 对齐到真实落库的图片数（只上调，不回退）。
+ * createGeneratedImage 已逐张自增，这里是任务收尾时的兜底自愈。
+ */
+function syncTaskImageCount(taskId: string): void {
+  getDb()
+    .prepare(
+      `
+      UPDATE generation_tasks
+      SET image_count = MAX(
+        image_count,
+        (SELECT COUNT(*) FROM generated_images gi WHERE gi.task_id = generation_tasks.id)
+      )
+      WHERE id = ?
+    `,
+    )
+    .run(taskId);
+}
+
 export function updateTaskProgressStage(taskId: string, stage: TaskProgressStage): void {
   getDb()
     .prepare("UPDATE generation_tasks SET progress_stage = ? WHERE id = ? AND status = 'processing'")
@@ -2450,6 +2595,8 @@ export function markTaskSucceeded(taskId: string, imageCount: number): void {
   if (result.changes !== 1) {
     return;
   }
+
+  syncTaskImageCount(taskId);
 
   if (task.conversation_id) {
     const images = getTaskImages(taskId);
@@ -2484,6 +2631,8 @@ export function markTaskFailed(taskId: string, message: string): void {
     return;
   }
 
+  syncTaskImageCount(taskId);
+
   if (task.conversation_id) {
     createConversationMessage({
       conversationId: task.conversation_id,
@@ -2497,7 +2646,15 @@ export function markTaskFailed(taskId: string, message: string): void {
   upsertUsageDaily({ succeeded: 0, failed: 1, images: 0, cost: task.cost_estimate });
 }
 
+// 取消不引入独立的 status：generation_tasks.status 上有 CHECK 约束，加 'cancelled' 需要
+// 重建表，而 generated_images 对它有 ON DELETE CASCADE 外键，重建过程风险远大于收益。
+// 取消因此仍落在 status='failed'，用这条固定文案 + progress_stage='canceled' 识别。
 export const taskStoppedMessage = "用户已停止生成";
+
+/** 这个任务是「用户主动取消」而不是真失败。 */
+export function isCanceledTaskRow(row: GenerationTaskRow): boolean {
+  return row.status === "failed" && (row.error_message === taskStoppedMessage || row.progress_stage === "canceled");
+}
 
 export function cancelGenerationTask(taskId: string): GenerationTaskRow | null {
   const task = getGenerationTask(taskId);
@@ -2519,6 +2676,9 @@ export function cancelGenerationTask(taskId: string): GenerationTaskRow | null {
     )
     .run(nowIso(), taskStoppedMessage, taskId);
 
+  // 取消前已经出的图保留、仍计费，只是不再预占剩余 quantity。
+  syncTaskImageCount(taskId);
+
   if (task.conversation_id) {
     createConversationMessage({
       conversationId: task.conversation_id,
@@ -2534,7 +2694,7 @@ export function cancelGenerationTask(taskId: string): GenerationTaskRow | null {
 
 export function isTaskStopped(taskId: string): boolean {
   const task = getGenerationTask(taskId);
-  return task?.status === "failed" && task.error_message === taskStoppedMessage;
+  return task ? task.status === "failed" && task.error_message === taskStoppedMessage : false;
 }
 
 function upsertUsageDaily(input: { succeeded: number; failed: number; images: number; cost: number }): void {
@@ -2568,7 +2728,8 @@ export function createGeneratedImage(input: {
 }): GeneratedImageRow {
   const id = input.id ?? createId("img");
   const createdAt = nowIso();
-  getDb()
+  const database = getDb();
+  database
     .prepare(
       `
       INSERT INTO generated_images (
@@ -2587,6 +2748,8 @@ export function createGeneratedImage(input: {
       input.templateId,
       createdAt,
     );
+  // 计费计数只增不减：会话删除、保留期清理删掉图片行之后，这一列仍记着真实出过几张。
+  database.prepare("UPDATE generation_tasks SET image_count = image_count + 1 WHERE id = ?").run(input.taskId);
 
   const image = getGeneratedImage(id);
   if (!image) {
@@ -3156,7 +3319,7 @@ export function getAdminStats(): AdminStats {
       SELECT
         ug.id AS groupId,
         COALESCE(ug.name, '未分组') AS name,
-        COALESCE(SUM(CASE WHEN gt.status != 'failed' THEN gt.quantity ELSE 0 END), 0) AS used,
+        COALESCE(SUM(${billedImageCountSql("gt")}), 0) AS used,
         MAX(COALESCE(u.monthly_quota, ug.monthly_quota)) AS quota
       FROM users u
       LEFT JOIN user_groups ug ON ug.id = u.group_id
@@ -3219,7 +3382,7 @@ function publicProgressStage(row: GenerationTaskRow): TaskProgressStage {
     return "completed";
   }
   if (row.status === "failed") {
-    return row.error_message === taskStoppedMessage || row.progress_stage === "canceled" ? "canceled" : "failed";
+    return isCanceledTaskRow(row) ? "canceled" : "failed";
   }
   if (row.progress_stage === "requesting" || row.progress_stage === "generating" || row.progress_stage === "saving") {
     return row.progress_stage;
@@ -3240,6 +3403,7 @@ export function toPublicTask(row: GenerationTaskRow, images: GeneratedImageRow[]
     promptSuffix: row.prompt_suffix,
     negativePrompt: row.negative_prompt,
     size: row.size,
+    quality: row.quality,
     quantity: row.quantity,
     requestedConcurrency: row.requested_concurrency,
     templateId: row.template_id,
@@ -3285,17 +3449,68 @@ function toPublicReferenceImage(id: string): PublicSourceImage | null {
   };
 }
 
+/**
+ * 会话详情的弱 ETag。
+ * 指纹里带上会话 updated_at、消息/任务/图片的条数与最大时间戳，另外把任务的
+ * status + progress_stage 也算进去 —— requesting→generating→saving 只改阶段不改时间戳，
+ * 漏掉它会让轮询卡在 304 上看不到进度。
+ */
+export function conversationDetailEtag(input: {
+  conversation: ConversationRow;
+  messages: ConversationMessageRow[];
+  tasks: GenerationTaskRow[];
+  taskImages?: Map<string, GeneratedImageRow[]>;
+}): string {
+  const parts: string[] = [
+    `c:${input.conversation.id}:${input.conversation.updated_at}`,
+    `m:${input.messages.length}:${input.messages.at(-1)?.created_at ?? ""}`,
+    `t:${input.tasks.length}`,
+  ];
+  for (const task of input.tasks) {
+    const images = input.taskImages?.get(task.id) ?? [];
+    parts.push(
+      [
+        task.id,
+        task.status,
+        task.progress_stage ?? "",
+        task.started_at ?? "",
+        task.completed_at ?? "",
+        String(images.length),
+        images.at(-1)?.created_at ?? "",
+      ].join("|"),
+    );
+  }
+  const digest = crypto.createHash("sha1").update(parts.join("\n")).digest("hex");
+  return `W/"conv-${digest}"`;
+}
+
+/** 渲染会话详情时预取好的行，用来消掉逐任务 / 逐消息的 N+1 查询。 */
+export interface ConversationRenderContext {
+  taskImages?: Map<string, GeneratedImageRow[]>;
+  tasks?: Map<string, GenerationTaskRow>;
+}
+
 export function toPublicConversation(
   row: ConversationRow,
   options: {
     messages?: ConversationMessageRow[];
     tasks?: GenerationTaskRow[];
+    taskImages?: Map<string, GeneratedImageRow[]>;
   } = {},
 ): PublicConversation {
   const latestTask = getLatestConversationTask(row.id);
   const latestImage = getLatestConversationImage(row.id);
   const imageMap = options.messages ? getConversationImageMap(row.id) : new Map<string, GeneratedImageRow>();
   const owner = row.user_id ? getUserById(row.user_id) : null;
+  // 调用方（会话详情路由）已经批量取过就直接复用；没传就在这里批量补一次，
+  // 无论如何都不再逐任务查。
+  const taskImageMap =
+    options.taskImages ?? (options.tasks ? getTaskImagesByTaskIds(options.tasks.map((task) => task.id)) : undefined);
+  const taskMap = options.tasks ? new Map(options.tasks.map((task) => [task.id, task])) : undefined;
+  const context: ConversationRenderContext = { taskImages: taskImageMap, tasks: taskMap };
+  const latestTaskImages = latestTask
+    ? taskImageMap?.get(latestTask.id) ?? getTaskImages(latestTask.id)
+    : [];
 
   return {
     id: row.id,
@@ -3307,26 +3522,33 @@ export function toPublicConversation(
     fixedPrompt: row.fixed_prompt,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    latestTask: latestTask ? toPublicTask(latestTask, getTaskImages(latestTask.id)) : null,
+    latestTask: latestTask ? toPublicTask(latestTask, latestTaskImages) : null,
     latestImage: latestImage ? toPublicImage({ ...latestImage, template_name: null }) : null,
-    messages: options.messages?.map((message) => toPublicConversationMessage(message, imageMap)),
-    tasks: options.tasks?.map((task) => toPublicTask(task, getTaskImages(task.id))),
+    messages: options.messages?.map((message) => toPublicConversationMessage(message, imageMap, context)),
+    tasks: options.tasks?.map((task) => toPublicTask(task, taskImageMap?.get(task.id) ?? [])),
   };
 }
 
 export function toPublicConversationMessage(
   row: ConversationMessageRow,
   imageMap?: Map<string, GeneratedImageRow>,
+  context?: ConversationRenderContext,
 ): PublicConversationMessage {
   const image = row.image_id ? imageMap?.get(row.image_id) ?? getGeneratedImage(row.image_id) : null;
   const sourceImage = !image && row.image_id ? getSourceImage(row.image_id) : null;
-  const shouldAttachTaskImages =
+  const messageTask =
     !image && row.role === "assistant" && row.task_id
-      ? getGenerationTask(row.task_id)?.status === "succeeded"
-      : false;
+      ? context?.tasks?.get(row.task_id) ?? getGenerationTask(row.task_id)
+      : null;
+  // 成功的任务照旧挂图；被用户取消的任务，取消前已经出的图也要留在对话里（这些图仍计费）。
+  const shouldAttachTaskImages = messageTask
+    ? messageTask.status === "succeeded" || isCanceledTaskRow(messageTask)
+    : false;
   const taskImages =
     shouldAttachTaskImages && row.task_id
-      ? getTaskImages(row.task_id).map((item) => toPublicImage({ ...item, template_name: null }))
+      ? (context?.taskImages?.get(row.task_id) ?? getTaskImages(row.task_id)).map((item) =>
+          toPublicImage({ ...item, template_name: null }),
+        )
       : [];
   const images = image ? [toPublicImage({ ...image, template_name: null })] : taskImages;
   return {
