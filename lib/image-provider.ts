@@ -9,7 +9,10 @@ import {
   updateOpenAIOAuthAccountTokens,
 } from "./db";
 import { apiQualityForOption, apiSizeForOption } from "./image-options";
-import { fitReferenceImagesToBudget } from "./image-upload";
+import { fitReferenceImagesToBudget, type ReferenceImageUpload } from "./image-upload";
+import { runAcrossChannels, runImageGenerationBatches } from "./image-batch";
+import { isRetryableImageError, UpstreamImageError } from "./image-retry";
+import { withUpstreamImageSlot } from "./concurrency";
 import {
   decodeOpenAIIdToken,
   decryptToken,
@@ -59,73 +62,107 @@ export interface MaterializedImage {
   mimeType: string | null;
 }
 
+/**
+ * 生成一个任务需要的图片。
+ * @param alreadyDelivered 已经落库的张数（重启续跑时来自 generated_images），只补剩余部分。
+ */
 export async function callImageModel(
   task: GenerationTaskRow,
   sourceImagePaths: string[],
   signal?: AbortSignal,
   onImage?: (image: MaterializedImage) => Promise<void>,
+  alreadyDelivered = 0,
 ): Promise<MaterializedImage[]> {
-  const candidates = await resolveImageProviderCandidates(signal);
-  let lastError: unknown = null;
-  let deliveredCount = 0;
-  const countingOnImage = onImage
-    ? async (image: MaterializedImage) => {
-        await onImage(image);
-        deliveredCount += 1;
-      }
-    : undefined;
-
-  for (const settings of candidates) {
-    try {
-      return await callImageModelWithSettings(task, sourceImagePaths, settings, signal, deliveredCount, countingOnImage);
-    } catch (error) {
-      if (isAbortError(error) || signal?.aborted) {
-        throw error;
-      }
-      lastError = error;
-    }
+  const images: MaterializedImage[] = [];
+  if (alreadyDelivered >= task.quantity) {
+    return images;
   }
 
-  throw lastError instanceof Error ? lastError : new Error("所有模型渠道均调用失败");
+  const candidates = await resolveImageProviderCandidates(signal);
+  // 参考图对一个任务只准备一次（读盘 + 压缩到网关预算内），各请求、各渠道复用。
+  const references = createReferenceImageLoader(sourceImagePaths);
+  let delivered = alreadyDelivered;
+
+  const deliver = async (image: MaterializedImage): Promise<void> => {
+    if (onImage) {
+      await onImage(image);
+    }
+    images.push(image);
+    delivered += 1;
+  };
+
+  await runAcrossChannels({
+    channels: candidates,
+    run: (settings) =>
+      callImageModelWithSettings(task, references, settings, signal, () => delivered, deliver),
+    isAbort: (error) => isAbortError(error) || Boolean(signal?.aborted),
+    isRetryable: isRetryableImageError,
+    exhaustedMessage: "所有模型渠道均调用失败",
+  });
+
+  return images;
 }
 
 async function callImageModelWithSettings(
   task: GenerationTaskRow,
-  sourceImagePaths: string[],
+  references: ReferenceImageLoader,
   settings: ImageRequestSettings,
-  signal?: AbortSignal,
-  alreadyDelivered = 0,
-  onImage?: (image: MaterializedImage) => Promise<void>,
-): Promise<MaterializedImage[]> {
+  signal: AbortSignal | undefined,
+  delivered: () => number,
+  deliver: (image: MaterializedImage) => Promise<void>,
+): Promise<void> {
   const taskConcurrency = normalizeTaskImageConcurrency(task.requested_concurrency, settings.imageConcurrency);
 
-  const images: MaterializedImage[] = [];
-  while (images.length + alreadyDelivered < task.quantity) {
-    const remaining = task.quantity - images.length - alreadyDelivered;
-    const batchSize = Math.min(remaining, taskConcurrency);
-    const batch = await Promise.all(
-      Array.from({ length: batchSize }, async () => {
-        const result =
-          task.mode === "text_to_image"
-            ? await requestTextToImage(task, settings, 1, signal)
-            : await requestImageEdit(task, sourceImagePaths, settings, 1, signal);
-        return normalizeImageItems(result);
+  await runImageGenerationBatches<MaterializedImage>({
+    total: task.quantity,
+    delivered,
+    concurrency: taskConcurrency,
+    // 每个 n=1 请求独立跑完整条链路：拿数据 → materialize → 落库。
+    request: async () => {
+      const payload =
+        task.mode === "text_to_image"
+          ? await requestTextToImage(task, settings, 1, signal)
+          : await requestImageEdit(task, references, settings, 1, signal);
+      const items = normalizeImageItems(payload);
+      return Promise.all(items.map((item) => materializeImageItem(item, signal)));
+    },
+    deliver,
+    isAbort: (error) => isAbortError(error) || Boolean(signal?.aborted),
+    isRetryable: isRetryableImageError,
+    maxRetriesPerBatch: 1,
+  });
+}
+
+export interface ReferenceImageLoader {
+  /** 原始参考图字节（OpenAI OAuth 走 data URL 用）。 */
+  raw: () => Promise<ReferenceImageUpload[]>;
+  /** 压缩到网关上传预算内的参考图（multipart 上传用）。 */
+  forUpload: () => Promise<ReferenceImageUpload[]>;
+  count: number;
+}
+
+export function createReferenceImageLoader(sourceImagePaths: string[]): ReferenceImageLoader {
+  let rawPromise: Promise<ReferenceImageUpload[]> | null = null;
+  let uploadPromise: Promise<ReferenceImageUpload[]> | null = null;
+
+  const raw = (): Promise<ReferenceImageUpload[]> => {
+    rawPromise ??= Promise.all(
+      sourceImagePaths.map(async (sourceImagePath) => {
+        const image = await readStorageFile(sourceImagePath);
+        return { ...image, fileName: path.basename(sourceImagePath) };
       }),
     );
-    const items = batch.flat();
-    if (items.length === 0) {
-      throw new Error("image-2 未返回图片数据");
-    }
+    return rawPromise;
+  };
 
-    for (const item of items.slice(0, remaining)) {
-      const image = await materializeImageItem(item, signal);
-      if (onImage) {
-        await onImage(image);
-      }
-      images.push(image);
-    }
-  }
-  return images;
+  const forUpload = (): Promise<ReferenceImageUpload[]> => {
+    uploadPromise ??= raw().then((images) =>
+      fitReferenceImagesToBudget(images, appConfig.sub2apiMaxUploadBytes),
+    );
+    return uploadPromise;
+  };
+
+  return { raw, forUpload, count: sourceImagePaths.length };
 }
 
 function normalizeTaskImageConcurrency(value: number | null, fallback: number): number {
@@ -233,12 +270,12 @@ async function requestTextToImage(
   signal?: AbortSignal,
 ): Promise<unknown> {
   if (settings.provider === "openai_oauth") {
-    return requestOpenAIOAuthImage(task, [], settings, signal);
+    return requestOpenAIOAuthImage(task, emptyReferenceImageLoader, settings, signal);
   }
 
   const body: Record<string, string | number> = {
     model: settings.imageModel,
-    prompt: buildPrompt(task),
+    prompt: buildPrompt(task, 0),
     n: quantity,
   };
 
@@ -251,55 +288,45 @@ async function requestTextToImage(
     body.quality = apiQuality;
   }
 
-  const response = await fetch(`${settings.baseUrl}/images/generations`, {
-    method: "POST",
-    headers: withOptionalHostHeader({
-      Authorization: `Bearer ${settings.bearerToken}`,
-      "Content-Type": "application/json",
-      "User-Agent": IMAGE_USER_AGENT,
-    }, settings.hostHeader),
-    body: JSON.stringify(body),
-    signal: requestSignal(signal),
-  });
+  return withUpstreamImageSlot(async () => {
+    const response = await fetch(`${settings.baseUrl}/images/generations`, {
+      method: "POST",
+      headers: withOptionalHostHeader({
+        Authorization: `Bearer ${settings.bearerToken}`,
+        "Content-Type": "application/json",
+        "User-Agent": IMAGE_USER_AGENT,
+      }, settings.hostHeader),
+      body: JSON.stringify(body),
+      signal: requestSignal(signal),
+    });
 
-  return readModelResponse(response, "image generation failed", settings);
+    return readModelResponse(response, "image generation failed", settings);
+  });
 }
 
 async function requestImageEdit(
   task: GenerationTaskRow,
-  sourceImagePaths: string[],
+  references: ReferenceImageLoader,
   settings: ImageRequestSettings,
   quantity: number,
   signal?: AbortSignal,
 ): Promise<unknown> {
   if (settings.provider === "openai_oauth") {
-    return requestOpenAIOAuthImage(task, sourceImagePaths, settings, signal);
+    return requestOpenAIOAuthImage(task, references, settings, signal);
   }
 
-  if (sourceImagePaths.length === 0) {
+  if (references.count === 0) {
     throw new Error("缺少参考图，无法调用图片编辑接口");
   }
 
+  const uploadImages = await references.forUpload();
   const form = new FormData();
   form.append("model", settings.imageModel);
-  const sourceImages = await Promise.all(
-    sourceImagePaths.map(async (sourceImagePath) => {
-      const image = await readStorageFile(sourceImagePath);
-      return {
-        ...image,
-        fileName: path.basename(sourceImagePath),
-      };
-    }),
-  );
-  const uploadImages = await fitReferenceImagesToBudget(
-    sourceImages,
-    appConfig.sub2apiMaxUploadBytes,
-  );
   for (const image of uploadImages) {
     const blob = new Blob([new Uint8Array(image.bytes)], { type: image.mimeType });
     form.append("image", blob, image.fileName);
   }
-  form.append("prompt", buildPrompt(task));
+  form.append("prompt", buildPrompt(task, references.count));
   form.append("n", String(quantity));
   const apiSize = apiSizeForOption(task.size);
   if (apiSize) {
@@ -313,26 +340,34 @@ async function requestImageEdit(
     form.append("input_fidelity", appConfig.imageEditInputFidelity);
   }
 
-  const response = await fetch(`${settings.baseUrl}/images/edits`, {
-    method: "POST",
-    headers: withOptionalHostHeader({
-      Authorization: `Bearer ${settings.bearerToken}`,
-      "User-Agent": IMAGE_USER_AGENT,
-    }, settings.hostHeader),
-    body: form,
-    signal: requestSignal(signal),
-  });
+  return withUpstreamImageSlot(async () => {
+    const response = await fetch(`${settings.baseUrl}/images/edits`, {
+      method: "POST",
+      headers: withOptionalHostHeader({
+        Authorization: `Bearer ${settings.bearerToken}`,
+        "User-Agent": IMAGE_USER_AGENT,
+      }, settings.hostHeader),
+      body: form,
+      signal: requestSignal(signal),
+    });
 
-  return readModelResponse(response, "image edit failed", settings);
+    return readModelResponse(response, "image edit failed", settings);
+  });
 }
+
+const emptyReferenceImageLoader: ReferenceImageLoader = {
+  raw: async () => [],
+  forUpload: async () => [],
+  count: 0,
+};
 
 async function requestOpenAIOAuthImage(
   task: GenerationTaskRow,
-  sourceImagePaths: string[],
+  references: ReferenceImageLoader,
   settings: ImageRequestSettings,
   signal?: AbortSignal,
 ): Promise<ImageApiResponse> {
-  const body = await buildOpenAIOAuthResponsesBody(task, sourceImagePaths, settings);
+  const body = await buildOpenAIOAuthResponsesBody(task, references, settings);
   const headers: Record<string, string> = {
     Authorization: `Bearer ${settings.bearerToken}`,
     "Content-Type": "application/json",
@@ -350,42 +385,45 @@ async function requestOpenAIOAuthImage(
     headers.session_id = sessionId;
   }
 
-  const response = await fetchWithOptionalProxy(openAIChatGPTCodexResponsesUrl, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
-    signal: requestSignal(signal),
-  }, settings.openaiOAuthProxyUrl);
+  return withUpstreamImageSlot(async () => {
+    const response = await fetchWithOptionalProxy(openAIChatGPTCodexResponsesUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+      signal: requestSignal(signal),
+    }, settings.openaiOAuthProxyUrl);
 
-  if (!response.ok) {
-    const text = await response.text();
-    const message = formatModelError(response.status, text, "OpenAI OAuth Codex image generation failed");
-    if (response.status === 401 && settings.oauthAccountId) {
-      updateOpenAIOAuthAccountStatus(settings.oauthAccountId, "error", message);
+    if (!response.ok) {
+      const text = await response.text();
+      const message = formatModelError(response.status, text, "OpenAI OAuth Codex image generation failed");
+      if (response.status === 401 && settings.oauthAccountId) {
+        updateOpenAIOAuthAccountStatus(settings.oauthAccountId, "error", message);
+      }
+      throw new UpstreamImageError(message, response.status);
     }
-    throw new Error(message);
-  }
 
-  const text = await response.text();
-  const images = extractOpenAIOAuthImagesFromResponsesStream(text);
-  if (images.length === 0) {
-    throw new Error("OpenAI OAuth Codex Responses 未返回图片数据");
-  }
-  return { data: images };
+    const text = await response.text();
+    const images = extractOpenAIOAuthImagesFromResponsesStream(text);
+    if (images.length === 0) {
+      throw new Error("OpenAI OAuth Codex Responses 未返回图片数据");
+    }
+    return { data: images };
+  });
 }
 
 async function buildOpenAIOAuthResponsesBody(
   task: GenerationTaskRow,
-  sourceImagePaths: string[],
+  references: ReferenceImageLoader,
   settings: ImageRequestSettings,
 ): Promise<Record<string, unknown>> {
-  const content: Array<Record<string, string>> = [{ type: "input_text", text: buildPrompt(task) }];
+  const content: Array<Record<string, string>> = [
+    { type: "input_text", text: buildPrompt(task, references.count) },
+  ];
   if (task.mode !== "text_to_image") {
-    if (sourceImagePaths.length === 0) {
+    if (references.count === 0) {
       throw new Error("缺少参考图，无法调用图片编辑接口");
     }
-    for (const sourceImagePath of sourceImagePaths) {
-      const source = await readStorageFile(sourceImagePath);
+    for (const source of await references.raw()) {
       content.push({
         type: "input_image",
         image_url: `data:${source.mimeType};base64,${Buffer.from(source.bytes).toString("base64")}`,
@@ -422,17 +460,15 @@ async function buildOpenAIOAuthResponsesBody(
   };
 }
 
-function buildPrompt(task: GenerationTaskRow): string {
+export function buildPrompt(task: GenerationTaskRow, referenceCount: number): string {
   const parts = [task.prompt.trim()];
   if (task.negative_prompt && task.negative_prompt.trim() !== "") {
     parts.push(`避免出现：${task.negative_prompt.trim()}`);
   }
 
-  if (task.mode !== "text_to_image") {
-    parts.push(`参考强度：${task.reference_strength.toFixed(2)}；风格强度：${task.style_strength.toFixed(2)}。`);
-    if (task.reference_image_id) {
-      parts.push("图片参考关系：第一张图片是需要处理的主图，后续图片是额外参考图；请以主图为基础，结合参考图和文字提示进行二次生成。");
-    }
+  // 强度数字对上游是纯噪声（模型并不按这两个小数调节），只有多图时的主图/参考图关系才有信息量。
+  if (task.mode !== "text_to_image" && referenceCount > 1) {
+    parts.push("图片参考关系：第一张是主图，后续是参考图；请以主图为基础，结合参考图和文字提示进行二次生成。");
   }
 
   return parts.join("\n");
@@ -450,7 +486,8 @@ async function readModelResponse(
     if (settings.provider === "openai_oauth" && response.status === 401 && settings.oauthAccountId) {
       updateOpenAIOAuthAccountStatus(settings.oauthAccountId, "error", message);
     }
-    throw new Error(message);
+    // 带上 status，让上层区分「换渠道有救」（5xx/429/408）和「换几次都白搭」（其余 4xx）。
+    throw new UpstreamImageError(message, response.status);
   }
 
   return response.json();

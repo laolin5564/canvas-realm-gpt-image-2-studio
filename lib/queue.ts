@@ -4,6 +4,7 @@ import {
   createId,
   getGenerationTask,
   getImageFilePathById,
+  getTaskImages,
   isTaskStopped,
   markTaskFailed,
   markTaskSucceeded,
@@ -13,9 +14,10 @@ import {
   updateTaskProgressStage,
 } from "./db";
 import { normalizeImageConcurrency } from "./concurrency";
+import { ratioForOption } from "./image-options";
 import { callImageModel } from "./image-provider";
 import { isModelTimeoutMessage } from "./model-error";
-import { parseSize, saveGeneratedImageFile } from "./storage";
+import { saveGeneratedImageFile } from "./storage";
 import type { GenerationTaskRow } from "./types";
 
 export async function processNextQueuedTask(): Promise<boolean> {
@@ -29,10 +31,21 @@ export async function processNextQueuedTask(): Promise<boolean> {
 }
 
 async function processClaimedTask(task: GenerationTaskRow): Promise<void> {
-  const { width, height } = parseSize(task.size);
-  let savedCount = 0;
+  const targetRatio = ratioForOption(task.size);
+  // 重启续跑：上个进程可能已经落了几张，从已落库张数起步，不重复出图。
+  const alreadyDelivered = getTaskImages(task.id).length;
+  let savedCount = alreadyDelivered;
 
   try {
+    if (alreadyDelivered >= task.quantity) {
+      const current = getGenerationTask(task.id);
+      if (current && current.status === "processing") {
+        markTaskSucceeded(task.id, savedCount);
+        recordImageGenerationSuccess();
+      }
+      return;
+    }
+
     let extraRefIds: string[] = [];
     try {
       extraRefIds = task.reference_image_ids ? JSON.parse(task.reference_image_ids) : [];
@@ -58,19 +71,21 @@ async function processClaimedTask(task: GenerationTaskRow): Promise<void> {
       }
 
       const imageId = createId("img");
-      const filePath = await saveGeneratedImageFile({
+      const saved = await saveGeneratedImageFile({
         taskId: task.id,
         imageId,
         bytes: item.bytes,
         mimeType: item.mimeType,
+        targetRatio,
       });
 
       createGeneratedImage({
         id: imageId,
         taskId: task.id,
-        filePath,
-        width,
-        height,
+        filePath: saved.relativePath,
+        // 记录真实像素，而不是比例数字（上游经常不严格遵守 size）。
+        width: saved.width,
+        height: saved.height,
         prompt: task.prompt,
         mode: task.mode,
         templateId: task.template_id,
@@ -79,7 +94,7 @@ async function processClaimedTask(task: GenerationTaskRow): Promise<void> {
     };
 
     await runWithTaskCancellation(task.id, (signal) =>
-      callImageModel(task, sourceImagePaths, signal, saveImage),
+      callImageModel(task, sourceImagePaths, signal, saveImage, alreadyDelivered),
     );
     const current = getGenerationTask(task.id);
     if (!current || current.status !== "processing") {
@@ -130,6 +145,29 @@ export function inFlightTaskCount(): number {
   return inFlightTasks.size;
 }
 
+// 槽位释放通知：任务一收尾就叫醒 worker 立刻补位，而不是干等下一次轮询。
+type SlotFreedListener = () => void;
+const slotFreedListeners = new Set<SlotFreedListener>();
+
+export function onSlotFreed(listener: SlotFreedListener): () => void {
+  slotFreedListeners.add(listener);
+  return () => {
+    slotFreedListeners.delete(listener);
+  };
+}
+
+function notifySlotFreed(): void {
+  for (const listener of slotFreedListeners) {
+    try {
+      listener();
+    } catch (error) {
+      console.error(
+        `slot-freed listener failed: ${error instanceof Error ? error.message : error}`,
+      );
+    }
+  }
+}
+
 export function fillProcessingSlots(maxConcurrency: number): number {
   const capacity = normalizeImageConcurrency(maxConcurrency) - inFlightTasks.size;
   if (capacity <= 0) {
@@ -146,6 +184,7 @@ export function fillProcessingSlots(maxConcurrency: number): number {
       })
       .finally(() => {
         inFlightTasks.delete(running);
+        notifySlotFreed();
       });
     inFlightTasks.add(running);
   }
