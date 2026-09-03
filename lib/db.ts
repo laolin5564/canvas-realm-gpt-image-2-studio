@@ -7,6 +7,7 @@ import { composeConversationPrompt, normalizeConversationFixedPrompt } from "./c
 import { normalizeImageConcurrency, resolveUpstreamImageMaxInflight } from "./concurrency";
 import { summarizeAttemptsByChannel, type AttemptSample } from "./attempt-stats";
 import { apiQualityForOption, normalizeImageSizeOption } from "./image-options";
+import { apiKeyPrefix, hashApiKeySecret, maxActiveApiKeysPerUser } from "./api-keys";
 import { normalizeProxyUrl, redactProxyUrl } from "./proxy";
 import {
   computeDiscount,
@@ -54,6 +55,7 @@ import type {
   PublicOpenAIOAuthAccount,
   PublicTemplate,
   PublicUser,
+  PublicUserApiKey,
   PublicUserGroup,
   SessionRow,
   SourceImageRow,
@@ -63,6 +65,8 @@ import type {
   TemplateVariableDefinition,
   TemplateRow,
   TemplateScope,
+  TaskSource,
+  UserApiKeyRow,
   UserGroupRow,
   UserRole,
   UserStatus,
@@ -99,6 +103,10 @@ export interface CreateTaskInput {
   referenceStrength: number;
   styleStrength: number;
   applyFixedPrompt?: boolean;
+  /** 任务来源，默认 'web'；'api' 表示由开放接口创建。 */
+  source?: TaskSource;
+  /** 不建会话、不写会话消息（conversation_id 保持 NULL）；source='api' 时自动为真。 */
+  skipConversation?: boolean;
 }
 
 export interface CreateTemplateInput {
@@ -236,7 +244,9 @@ type AppSettingKey =
   | "site_title"
   | "site_subtitle"
   | "registration_enabled"
-  | "registration_default_group_id";
+  | "registration_default_group_id"
+  | "api_enabled"
+  | "api_signing_secret";
 
 function templateTextVariable(
   key: string,
@@ -704,6 +714,23 @@ function initializeSchema(database: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_sessions_token
       ON sessions (token_hash);
 
+    CREATE TABLE IF NOT EXISTS user_api_keys (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      key_prefix TEXT NOT NULL,
+      key_hash TEXT NOT NULL UNIQUE,
+      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'revoked')),
+      last_used_at TEXT,
+      request_count INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      revoked_at TEXT,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_user_api_keys_user
+      ON user_api_keys (user_id, created_at);
+
     CREATE TABLE IF NOT EXISTS ai_credit_orders (
       order_id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
@@ -833,6 +860,8 @@ function initializeSchema(database: DatabaseSync): void {
     backfillTaskImageCount(database);
   }
   ensureColumn(database, "generation_tasks", "error_detail", "TEXT");
+  // 老库里的历史任务一律算站内工作台来源。
+  ensureColumn(database, "generation_tasks", "source", "TEXT NOT NULL DEFAULT 'web'");
   ensureColumn(database, "templates", "owner_user_id", "TEXT");
   ensureColumn(database, "templates", "template_variables", "TEXT");
   ensureColumn(database, "source_images", "user_id", "TEXT");
@@ -853,6 +882,9 @@ function initializeSchema(database: DatabaseSync): void {
 
     CREATE INDEX IF NOT EXISTS idx_generation_tasks_conversation
       ON generation_tasks (conversation_id, created_at);
+
+    CREATE INDEX IF NOT EXISTS idx_generation_tasks_source
+      ON generation_tasks (user_id, source, status);
 
     CREATE INDEX IF NOT EXISTS idx_templates_owner
       ON templates (owner_user_id, created_at);
@@ -1305,6 +1337,122 @@ export function deleteExpiredSessions(): void {
 export function cleanupExpiredSessions(): number {
   const result = getDb().prepare("DELETE FROM sessions WHERE expires_at <= ?").run(nowIso());
   return Number(result.changes ?? 0);
+}
+
+/* ---------------------------------------------------------------------------
+ * 开放 API：用户自助密钥
+ * 库里只留 sha256(明文)，明文只在创建时返回一次。
+ * ------------------------------------------------------------------------- */
+
+export function listUserApiKeys(userId: string): UserApiKeyRow[] {
+  return castRows<UserApiKeyRow>(
+    getDb()
+      .prepare("SELECT * FROM user_api_keys WHERE user_id = ? ORDER BY created_at DESC LIMIT 50")
+      .all(userId),
+  );
+}
+
+export function getUserApiKey(id: string): UserApiKeyRow | null {
+  return castRow<UserApiKeyRow>(
+    getDb().prepare("SELECT * FROM user_api_keys WHERE id = ? LIMIT 1").get(id),
+  );
+}
+
+/** 只认还没撤销的密钥；撤销后同一把 key 立刻失效。 */
+export function getActiveUserApiKeyByHash(keyHash: string): UserApiKeyRow | null {
+  return castRow<UserApiKeyRow>(
+    getDb()
+      .prepare("SELECT * FROM user_api_keys WHERE key_hash = ? AND status = 'active' LIMIT 1")
+      .get(keyHash),
+  );
+}
+
+export function countActiveUserApiKeys(userId: string): number {
+  const row = castRow<{ count: number }>(
+    getDb()
+      .prepare("SELECT COUNT(*) AS count FROM user_api_keys WHERE user_id = ? AND status = 'active'")
+      .get(userId),
+  );
+  return row?.count ?? 0;
+}
+
+export function createUserApiKey(input: { userId: string; name: string; secret: string }): UserApiKeyRow {
+  if (countActiveUserApiKeys(input.userId) >= maxActiveApiKeysPerUser) {
+    throw Object.assign(new Error(`每个账号最多保留 ${maxActiveApiKeysPerUser} 把有效密钥，请先撤销旧密钥`), {
+      status: 403,
+      code: "forbidden",
+    });
+  }
+
+  const id = createId("apikey");
+  const createdAt = nowIso();
+  getDb()
+    .prepare(
+      `
+      INSERT INTO user_api_keys (
+        id, user_id, name, key_prefix, key_hash, status, last_used_at, request_count, created_at, revoked_at
+      ) VALUES (?, ?, ?, ?, ?, 'active', NULL, 0, ?, NULL)
+    `,
+    )
+    .run(id, input.userId, input.name, apiKeyPrefix(input.secret), hashApiKeySecret(input.secret), createdAt);
+
+  const created = getUserApiKey(id);
+  if (!created) {
+    throw new Error("API 密钥创建失败");
+  }
+  return created;
+}
+
+export function revokeUserApiKey(id: string): UserApiKeyRow | null {
+  getDb()
+    .prepare("UPDATE user_api_keys SET status = 'revoked', revoked_at = ? WHERE id = ? AND status = 'active'")
+    .run(nowIso(), id);
+  return getUserApiKey(id);
+}
+
+/** 记录一次调用；调用方按分钟节流，pendingCount 是这段时间攒下来的次数。 */
+export function recordUserApiKeyUsage(id: string, pendingCount = 1): void {
+  getDb()
+    .prepare("UPDATE user_api_keys SET last_used_at = ?, request_count = request_count + ? WHERE id = ?")
+    .run(nowIso(), Math.max(1, Math.trunc(pendingCount)), id);
+}
+
+export function toPublicUserApiKey(row: UserApiKeyRow): PublicUserApiKey {
+  return {
+    id: row.id,
+    name: row.name,
+    prefix: row.key_prefix,
+    status: row.status,
+    lastUsedAt: row.last_used_at,
+    requestCount: row.request_count,
+    createdAt: row.created_at,
+  };
+}
+
+/** 开放 API 总开关，默认开；关掉之后 /api/v1 与密钥创建一律 403 api_disabled。 */
+export function isApiEnabled(): boolean {
+  return getAppSetting("api_enabled") !== "false";
+}
+
+/**
+ * 签名 URL 的密钥：优先 env API_SIGNING_SECRET；
+ * 没配就在 app_settings 里生成一次随机值并持久化，重启后签名仍然有效。
+ */
+export function getApiSigningSecret(): string {
+  const fromEnv = process.env.API_SIGNING_SECRET?.trim();
+  if (fromEnv) {
+    return fromEnv;
+  }
+
+  const stored = getAppSetting("api_signing_secret");
+  if (stored) {
+    return stored;
+  }
+
+  const generated = crypto.randomBytes(32).toString("base64url");
+  setAppSetting("api_signing_secret", generated);
+  // 并发首启时可能有别的进程先写进去了，回读一次以两边取到同一把密钥。
+  return getAppSetting("api_signing_secret") ?? generated;
 }
 
 export function monthStartIso(date = new Date()): string {
@@ -2475,6 +2623,7 @@ export function getPublicSiteSettings(): {
   siteSubtitle: string;
   registrationEnabled: boolean;
   imageDirectBaseUrl: string;
+  apiEnabled: boolean;
 } {
   const registration = getRegistrationSettings();
   return {
@@ -2482,6 +2631,7 @@ export function getPublicSiteSettings(): {
     siteSubtitle: getAppSetting("site_subtitle") || "image-2 workspace",
     registrationEnabled: registration.registrationEnabled || countUsers() === 0,
     imageDirectBaseUrl: appConfig.imagePublicBaseUrl,
+    apiEnabled: isApiEnabled(),
   };
 }
 
@@ -2522,6 +2672,7 @@ export function getPublicAdminSettings(): PublicAdminSettings {
     registrationEnabled: registration.registrationEnabled,
     registrationDefaultGroupId: registration.registrationDefaultGroupId,
     registrationDefaultQuota: getUserGroup(registration.registrationDefaultGroupId)?.monthly_quota ?? getDefaultGroup().monthly_quota,
+    apiEnabled: isApiEnabled(),
   };
 }
 
@@ -2876,14 +3027,21 @@ export function createGenerationTask(input: CreateTaskInput): GenerationTaskRow 
   const id = createId("task");
   const createdAt = nowIso();
   const costEstimate = input.quantity * appConfig.costPerImage;
+  const source: TaskSource = input.source ?? "web";
+  // 开放 API 的任务不落会话：conversation_id 保持 NULL，也不写会话消息，
+  // 但出图照常进 generated_images，历史页仍然看得到。
+  const skipConversation = input.skipConversation === true || source === "api";
 
   try {
     database.exec("BEGIN IMMEDIATE");
-    const existingConversation = input.conversationId ? getConversation(input.conversationId) : null;
-    const conversation = existingConversation ?? createConversation(titleFromPrompt(input.prompt), input.userId);
-    const conversationId = conversation.id;
+    const existingConversation =
+      !skipConversation && input.conversationId ? getConversation(input.conversationId) : null;
+    const conversation = skipConversation
+      ? null
+      : existingConversation ?? createConversation(titleFromPrompt(input.prompt), input.userId);
+    const conversationId = conversation?.id ?? null;
     const activeFixedPrompt =
-      input.applyFixedPrompt === false || conversation.fixed_prompt_enabled !== 1
+      !conversation || input.applyFixedPrompt === false || conversation.fixed_prompt_enabled !== 1
         ? null
         : conversation.fixed_prompt;
     const composedPrompt = composeConversationPrompt(input.prompt, activeFixedPrompt);
@@ -2898,8 +3056,8 @@ export function createGenerationTask(input: CreateTaskInput): GenerationTaskRow 
           id, user_id, conversation_id, mode, status, progress_stage, prompt, fixed_prompt, prompt_suffix,
           negative_prompt, size, quality, quantity, requested_concurrency, template_id,
           source_image_id, reference_image_id, reference_image_ids, reference_strength, style_strength, cost_estimate,
-          error_message, created_at, started_at, completed_at
-        ) VALUES (?, ?, ?, ?, 'queued', 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL)
+          error_message, source, created_at, started_at, completed_at
+        ) VALUES (?, ?, ?, ?, 'queued', 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL, NULL)
       `,
       )
       .run(
@@ -2922,17 +3080,20 @@ export function createGenerationTask(input: CreateTaskInput): GenerationTaskRow 
         input.referenceStrength,
         input.styleStrength,
         costEstimate,
+        source,
         createdAt,
       );
 
-    createConversationMessage({
-      conversationId,
-      role: "user",
-      content: composedPrompt.messageContent,
-      taskId: id,
-      imageId: input.sourceImageId,
-    });
-    touchConversation(conversationId);
+    if (conversationId) {
+      createConversationMessage({
+        conversationId,
+        role: "user",
+        content: composedPrompt.messageContent,
+        taskId: id,
+        imageId: input.sourceImageId,
+      });
+      touchConversation(conversationId);
+    }
     database.exec("COMMIT");
   } catch (error) {
     try {
@@ -2973,6 +3134,30 @@ export function listGenerationTasks(input: ListTasksInput): GenerationTaskRow[] 
       .prepare(`SELECT * FROM generation_tasks ${whereSql} ORDER BY created_at DESC LIMIT ?`)
       .all(...params, boundedLimit),
   );
+}
+
+/** 开放接口的任务列表：只看本人、只看 source='api'。 */
+export function listApiGenerationTasks(userId: string, limit: number): GenerationTaskRow[] {
+  const boundedLimit = Math.min(Math.max(limit, 1), 50);
+  return castRows<GenerationTaskRow>(
+    getDb()
+      .prepare(
+        "SELECT * FROM generation_tasks WHERE user_id = ? AND source = 'api' ORDER BY created_at DESC LIMIT ?",
+      )
+      .all(userId, boundedLimit),
+  );
+}
+
+/** 同时在跑的 API 任务数（queued + processing），用于每用户 5 个的并发闸。 */
+export function countActiveApiTasks(userId: string): number {
+  const row = castRow<{ count: number }>(
+    getDb()
+      .prepare(
+        "SELECT COUNT(*) AS count FROM generation_tasks WHERE user_id = ? AND source = 'api' AND status IN ('queued', 'processing')",
+      )
+      .get(userId),
+  );
+  return row?.count ?? 0;
 }
 
 export function getGenerationTask(id: string): GenerationTaskRow | null {

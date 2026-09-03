@@ -67,6 +67,9 @@ export async function PUT(request: NextRequest): Promise<NextResponse> {
     if (input.registrationEnabled !== undefined) {
       setAppSetting("registration_enabled", String(input.registrationEnabled));
     }
+    if (input.apiEnabled !== undefined) {
+      setAppSetting("api_enabled", String(input.apiEnabled));
+    }
     if (input.registrationDefaultGroupId) {
       if (!getUserGroup(input.registrationDefaultGroupId)) {
         return jsonError("注册默认分组不存在", 400);
