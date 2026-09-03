@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import clsx from "clsx";
 import { sizeFromDimensions } from "@/lib/image-options";
-import type { CurrentUser, GenerationMode, PublicImage, PublicTemplate } from "@/lib/types";
+import type { GenerationMode, PublicImage, PublicTemplate, PublicUser } from "@/lib/types";
 import { apiJson, categoryLabels, copyTextToClipboard, formatDateTime, modeLabels } from "@/components/client-api";
 import { handleImgError, useImageDirectBase, withDirectBase } from "@/components/image-src";
 import { ImageLightbox } from "@/components/ImageLightbox";
@@ -33,13 +33,21 @@ interface TemplateListResponse {
   templates: PublicTemplate[];
 }
 
-interface MeResponse {
-  user: CurrentUser | null;
+interface AdminUserListResponse {
+  users: PublicUser[];
+  pagination: { totalPages: number };
 }
 
 const allModes = ["", "text_to_image", "image_to_image"] as const;
 const historyPageSize = 30;
 const keywordDebounceMs = 300;
+// 后台用户下拉一次取满一页（接口上限 100），必要时按 totalPages 续取，最多 5 页够覆盖内部用户量。
+const ownerPageSize = 100;
+const ownerMaxPages = 5;
+
+function ownerLabel(owner: PublicUser): string {
+  return owner.email ? `${owner.name}（${owner.email}）` : owner.name;
+}
 
 function mergeImages(current: PublicImage[], incoming: PublicImage[]): PublicImage[] {
   const seen = new Set(current.map((image) => image.id));
@@ -55,7 +63,9 @@ export function HistoryClient({ embedded = false }: { embedded?: boolean } = {})
   const [images, setImages] = useState<PublicImage[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [templates, setTemplates] = useState<PublicTemplate[]>([]);
-  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+  // 只有后台视角用得上：""=全部用户，否则为被筛选用户的 id。
+  const [ownerUserId, setOwnerUserId] = useState("");
+  const [owners, setOwners] = useState<PublicUser[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [selectionMode, setSelectionMode] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
@@ -97,6 +107,13 @@ export function HistoryClient({ embedded = false }: { embedded?: boolean } = {})
         if (cursor) {
           params.set("cursor", cursor);
         }
+        // 只有后台历史页才要全体范围；/history 不带 scope，管理员在那里同样只看自己的图。
+        if (embedded) {
+          params.set("scope", "all");
+          if (ownerUserId) {
+            params.set("userId", ownerUserId);
+          }
+        }
 
         const payload = await apiJson<ImageListResponse>(`/api/images?${params.toString()}`);
         if (seq !== requestSeqRef.current) {
@@ -123,20 +140,49 @@ export function HistoryClient({ embedded = false }: { embedded?: boolean } = {})
         }
       }
     },
-    [activeKeyword, mode, templateId],
+    // 筛选条件变化会重建 fetchImages，下面的 effect 随之从第一页重新加载（游标归零）。
+    [activeKeyword, embedded, mode, ownerUserId, templateId],
   );
 
   useEffect(() => {
-    Promise.all([
-      apiJson<TemplateListResponse>("/api/templates"),
-      apiJson<MeResponse>("/api/auth/me"),
-    ])
-      .then(([templatesPayload, mePayload]) => {
-        setTemplates(templatesPayload.templates);
-        setCurrentUser(mePayload.user);
-      })
+    apiJson<TemplateListResponse>("/api/templates")
+      .then((payload) => setTemplates(payload.templates))
       .catch((caught: Error) => setError(caught.message));
   }, []);
+
+  // 用户下拉只在后台视角拉：普通历史页不该调管理员接口。
+  useEffect(() => {
+    if (!embedded) {
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const collected: PublicUser[] = [];
+        let totalPages = 1;
+        for (let page = 1; page <= Math.min(totalPages, ownerMaxPages); page += 1) {
+          const payload = await apiJson<AdminUserListResponse>(
+            `/api/admin/users?page=${page}&pageSize=${ownerPageSize}`,
+          );
+          collected.push(...payload.users);
+          totalPages = payload.pagination?.totalPages ?? 1;
+        }
+        if (!cancelled) {
+          setOwners(collected);
+        }
+      } catch {
+        // 下拉拉不到就退化成「全部用户」，不影响图片列表本身。
+        if (!cancelled) {
+          setOwners([]);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [embedded]);
 
   // 关键词输入防抖 300ms，避免每个按键都打一次接口。
   useEffect(() => {
@@ -202,9 +248,10 @@ export function HistoryClient({ embedded = false }: { embedded?: boolean } = {})
     }
   }
 
-  const hasFilters = Boolean(activeKeyword || mode || templateId);
+  const hasFilters = Boolean(activeKeyword || mode || templateId || ownerUserId);
   const selectedCount = selectedIds.length;
-  const showImageOwner = currentUser?.role === "admin";
+  // 来源用户徽章只在后台视角有意义：/history 里全是自己的图。
+  const showImageOwner = embedded;
   const showGrid = images.length > 0;
   const showInitialLoading = !initialized && loading;
 
@@ -313,7 +360,7 @@ export function HistoryClient({ embedded = false }: { embedded?: boolean } = {})
         </section>
       ) : null}
 
-      <section className="history-toolbar">
+      <section className={clsx("history-toolbar", embedded && "with-owner-filter")}>
         <div className="field">
           <label htmlFor="keyword">关键词</label>
           <input
@@ -345,6 +392,24 @@ export function HistoryClient({ embedded = false }: { embedded?: boolean } = {})
             ))}
           </select>
         </div>
+        {embedded ? (
+          <div className="field">
+            <label htmlFor="ownerFilter">用户</label>
+            <select
+              id="ownerFilter"
+              className="select"
+              value={ownerUserId}
+              onChange={(event) => setOwnerUserId(event.target.value)}
+            >
+              <option value="">全部用户</option>
+              {owners.map((owner) => (
+                <option key={owner.id} value={owner.id}>
+                  {ownerLabel(owner)}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : null}
         <div className="history-actions">
           <button className="button primary history-action-button" type="button" onClick={refresh}>
             <Search size={16} aria-hidden="true" />
