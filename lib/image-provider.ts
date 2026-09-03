@@ -1,6 +1,5 @@
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
-import path from "node:path";
 import { appConfig, IMAGE_USER_AGENT } from "./config";
 import {
   getRuntimeImageSettings,
@@ -11,8 +10,14 @@ import {
   updateOpenAIOAuthAccountTokens,
 } from "./db";
 import { apiQualityForOption, apiSizeForOption } from "./image-options";
-import { fitReferenceImagesToBudget, type ReferenceImageUpload } from "./image-upload";
-import { isImageTimeoutError, runAcrossChannels, runImageGenerationBatches } from "./image-batch";
+import { totalReferenceImageBytes } from "./image-upload";
+import { runAcrossChannels, runImageGenerationBatches, shouldSwitchChannelByDefault } from "./image-batch";
+import {
+  createReferenceImageLoader,
+  describeReferencePayload,
+  sendWithPayloadTooLargeFallback,
+  type ReferenceImageLoader,
+} from "./reference-images";
 import { imageErrorStatus, isRetryableImageError } from "./image-retry";
 import { modelErrorDetail, UpstreamImageDetailError } from "./model-error-detail";
 import { withUpstreamImageSlot } from "./concurrency";
@@ -29,7 +34,9 @@ import { extractOpenAIOAuthImagesFromResponsesStream } from "./openai-image-brid
 import { formatModelError, formatModelErrorDetail } from "./model-error";
 import { fetchWithOptionalProxy } from "./proxy";
 import type { GenerationTaskRow, ImageProvider, OpenAIOAuthAccountRow } from "./types";
-import { assertSupportedImage, assertSupportedImageBytes, readStorageFile } from "./storage";
+import { assertSupportedImage, assertSupportedImageBytes } from "./storage";
+
+export { createReferenceImageLoader, type ReferenceImageLoader } from "./reference-images";
 
 interface ImageApiItem {
   b64_json?: string;
@@ -132,44 +139,11 @@ async function callImageModelWithSettings(
     deliver,
     isAbort: (error) => isAbortError(error) || Boolean(signal?.aborted),
     isRetryable: isRetryableImageError,
-    // 超时不在本渠道补发：直接换下一个渠道，别让用户等两个超时窗口。
-    shouldSwitchChannel: isImageTimeoutError,
+    // 超时 / 413 不在本渠道补发：直接换下一个渠道（超时别让用户等两个窗口；
+    // 413 在 requestImageEdit 里已经试过缩小参考图重发，再来一次也是同样的体积）。
+    shouldSwitchChannel: shouldSwitchChannelByDefault,
     maxRetriesPerBatch: 1,
   });
-}
-
-export interface ReferenceImageLoader {
-  /** 原始参考图字节（OpenAI OAuth 走 data URL 用）。 */
-  raw: () => Promise<ReferenceImageUpload[]>;
-  /** 压缩到网关上传预算内的参考图（multipart 上传用）。 */
-  forUpload: () => Promise<ReferenceImageUpload[]>;
-  count: number;
-}
-
-export function createReferenceImageLoader(sourceImagePaths: string[]): ReferenceImageLoader {
-  let rawPromise: Promise<ReferenceImageUpload[]> | null = null;
-  let uploadPromise: Promise<ReferenceImageUpload[]> | null = null;
-
-  const raw = (): Promise<ReferenceImageUpload[]> => {
-    rawPromise ??= Promise.all(
-      sourceImagePaths.map(async (sourceImagePath) => {
-        const image = await readStorageFile(sourceImagePath);
-        return { ...image, fileName: path.basename(sourceImagePath) };
-      }),
-    );
-    return rawPromise;
-  };
-
-  const forUpload = (): Promise<ReferenceImageUpload[]> => {
-    uploadPromise ??= raw().then((images) =>
-      fitReferenceImagesToBudget(images, appConfig.sub2apiMaxUploadBytes, {
-        maxImageBytes: appConfig.sub2apiMaxImageBytes,
-      }),
-    );
-    return uploadPromise;
-  };
-
-  return { raw, forUpload, count: sourceImagePaths.length };
 }
 
 /**
@@ -376,47 +350,54 @@ async function requestImageEdit(
     throw new Error("缺少参考图，无法调用图片编辑接口");
   }
 
-  const uploadImages = await references.forUpload();
-  const form = new FormData();
-  form.append("model", settings.imageModel);
-  for (const image of uploadImages) {
-    const blob = new Blob([new Uint8Array(image.bytes)], { type: image.mimeType });
-    form.append("image", blob, image.fileName);
-  }
-  form.append("prompt", buildPrompt(task, references.count));
-  form.append("n", String(quantity));
-  const apiSize = apiSizeForOption(task.size);
-  if (apiSize) {
-    form.append("size", apiSize);
-  }
-  const apiQuality = apiQualityForOption(task.quality);
-  if (apiQuality) {
-    form.append("quality", apiQuality);
-  }
-  if (appConfig.imageEditInputFidelity) {
-    form.append("input_fidelity", appConfig.imageEditInputFidelity);
-  }
+  // 每次发送都重新取 forUpload()：413 后 shrink 会换成缩小后的参考图，表单得重新拼。
+  const send = async (): Promise<unknown> => {
+    const uploadImages = await references.forUpload();
+    const referenceBytes = totalReferenceImageBytes(uploadImages);
+    const form = new FormData();
+    form.append("model", settings.imageModel);
+    for (const image of uploadImages) {
+      const blob = new Blob([new Uint8Array(image.bytes)], { type: image.mimeType });
+      form.append("image", blob, image.fileName);
+    }
+    form.append("prompt", buildPrompt(task, references.count));
+    form.append("n", String(quantity));
+    const apiSize = apiSizeForOption(task.size);
+    if (apiSize) {
+      form.append("size", apiSize);
+    }
+    const apiQuality = apiQualityForOption(task.quality);
+    if (apiQuality) {
+      form.append("quality", apiQuality);
+    }
+    if (appConfig.imageEditInputFidelity) {
+      form.append("input_fidelity", appConfig.imageEditInputFidelity);
+    }
 
-  return withUpstreamImageSlot(() =>
-    withAttemptTelemetry(task, settings, async () => {
-      const response = await fetchWithOriginHost(`${settings.baseUrl}/images/edits`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${settings.bearerToken}`,
-          "User-Agent": IMAGE_USER_AGENT,
-        },
-        body: form,
-        signal: requestSignal(signal),
-      }, settings.hostHeader);
+    return withUpstreamImageSlot(() =>
+      withAttemptTelemetry(task, settings, async () => {
+        const response = await fetchWithOriginHost(`${settings.baseUrl}/images/edits`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${settings.bearerToken}`,
+            "User-Agent": IMAGE_USER_AGENT,
+          },
+          body: form,
+          signal: requestSignal(signal),
+        }, settings.hostHeader);
 
-      return readModelResponse(response, "image edit failed", settings);
-    }),
-  );
+        return readModelResponse(response, "image edit failed", settings, { referenceBytes });
+      }),
+    );
+  };
+
+  return sendWithPayloadTooLargeFallback(references, send);
 }
 
 const emptyReferenceImageLoader: ReferenceImageLoader = {
   raw: async () => [],
   forUpload: async () => [],
+  shrink: async () => false,
   count: 0,
 };
 
@@ -544,6 +525,7 @@ async function readModelResponse(
   response: Response,
   fallback: string,
   settings: ImageRequestSettings,
+  context: { referenceBytes?: number } = {},
 ): Promise<unknown> {
   if (!response.ok) {
     const text = await response.text();
@@ -552,12 +534,17 @@ async function readModelResponse(
     if (settings.provider === "openai_oauth" && response.status === 401 && settings.oauthAccountId) {
       updateOpenAIOAuthAccountStatus(settings.oauthAccountId, "error", message);
     }
-    // 带上 status，让上层区分「换渠道有救」（5xx/429/408）和「换几次都白搭」（其余 4xx）；
+    // 413 时把本次请求体大小带进管理员详情，方便对照网关的 client_max_body_size；用户文案不变。
+    const payloadNote =
+      response.status === 413 && context.referenceBytes !== undefined
+        ? `（${describeReferencePayload(context.referenceBytes)}）`
+        : "";
+    // 带上 status，让上层区分「换渠道有救」（5xx/429/408/413）和「换几次都白搭」（其余 4xx）；
     // detail 是给管理员看的原文，用户看到的仍然只有上面那句短文案。
     throw new UpstreamImageDetailError(
       message,
       response.status,
-      `${messagePrefix}${formatModelErrorDetail(response.status, text, fallback)}`,
+      `${messagePrefix}${formatModelErrorDetail(response.status, text, fallback)}${payloadNote}`,
     );
   }
 

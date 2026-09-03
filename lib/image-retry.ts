@@ -25,8 +25,11 @@ export function imageErrorStatus(error: unknown): number | null {
 
 /**
  * 判断一个上游错误值不值得重试 / 切换渠道。
- * 可重试：5xx、429、408、网络错误、超时。
+ * 可重试：5xx、429、408、413、网络错误、超时。
  * 不可重试：其余 4xx、内容审核拒绝、参数错误。
+ *
+ * 413 是网关的请求体上限，属于渠道级配置（一个 nginx 默认 1m，另一个可能是 100m），
+ * 同一份参考图换个渠道完全可能过，所以归入可换渠道；同渠道原样补发则由调用方避免。
  */
 export function isRetryableImageError(error: unknown): boolean {
   if (error instanceof DOMException) {
@@ -38,7 +41,7 @@ export function isRetryableImageError(error: unknown): boolean {
   const status = imageErrorStatus(error);
 
   if (status !== null) {
-    if (status === 408 || status === 429) {
+    if (status === 408 || status === 413 || status === 429) {
       return true;
     }
     if (status >= 400 && status < 500) {
