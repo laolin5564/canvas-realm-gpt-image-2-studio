@@ -38,6 +38,12 @@ export type UserRole = (typeof userRoles)[number];
 export const userStatuses = ["active", "disabled"] as const;
 export type UserStatus = (typeof userStatuses)[number];
 
+export const discountCodeTypes = ["percent", "amount", "bonus"] as const;
+export type DiscountCodeType = (typeof discountCodeTypes)[number];
+
+export const discountCodeStatuses = ["active", "disabled"] as const;
+export type DiscountCodeStatus = (typeof discountCodeStatuses)[number];
+
 export const imageProviders = ["sub2api", "openai_oauth"] as const;
 export type ImageProvider = (typeof imageProviders)[number];
 
@@ -191,6 +197,35 @@ export interface UserGroupRow {
   monthly_quota: number;
   created_at: string;
   updated_at: string;
+}
+
+export interface DiscountCodeRow {
+  id: string;
+  code: string;
+  name: string | null;
+  type: DiscountCodeType;
+  value: number;
+  min_units: number;
+  max_uses: number | null;
+  per_user_limit: number;
+  starts_at: string | null;
+  expires_at: string | null;
+  status: DiscountCodeStatus;
+  used_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DiscountCodeRedemptionRow {
+  id: string;
+  code_id: string;
+  user_id: string;
+  order_id: string;
+  units_original: number;
+  units_charged: number;
+  credit_count: number;
+  discount_fen: number;
+  created_at: string;
 }
 
 export interface UserRow {
@@ -351,6 +386,43 @@ export interface PublicConversation {
   latestImage: PublicImage | null;
   messages?: PublicConversationMessage[];
   tasks?: PublicTask[];
+}
+
+export interface PublicDiscountCode {
+  id: string;
+  code: string;
+  name: string | null;
+  type: DiscountCodeType;
+  value: number;
+  minUnits: number;
+  maxUses: number | null;
+  perUserLimit: number;
+  startsAt: string | null;
+  expiresAt: string | null;
+  status: DiscountCodeStatus;
+  usedCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PublicDiscountRedemption {
+  id: string;
+  userId: string;
+  userName: string | null;
+  orderId: string;
+  unitsOriginal: number;
+  unitsCharged: number;
+  creditCount: number;
+  discountFen: number;
+  createdAt: string;
+}
+
+/** 下单响应里的折扣摘要：只回可公开的字段，不带折扣码内部 id。 */
+export interface PublicOrderDiscount {
+  code: string;
+  summary: string;
+  chargedUnits: number;
+  discountFen: number;
 }
 
 export interface PublicUserGroup {

@@ -8,6 +8,17 @@ import { normalizeImageConcurrency, resolveUpstreamImageMaxInflight } from "./co
 import { summarizeAttemptsByChannel, type AttemptSample } from "./attempt-stats";
 import { apiQualityForOption, normalizeImageSizeOption } from "./image-options";
 import { normalizeProxyUrl, redactProxyUrl } from "./proxy";
+import {
+  computeDiscount,
+  discountCodeAlphabet,
+  generatedDiscountCodeLength,
+  isValidDiscountCode,
+  normalizeDiscountCode,
+  validateDiscountCodeUsable,
+  validateDiscountValue,
+  type DiscountCodeDefinition,
+  type DiscountPreview,
+} from "./discount";
 import type {
   AdminStats,
   AdminUserListSummary,
@@ -16,6 +27,10 @@ import type {
   ChannelAttemptStats,
   ConversationMessageRow,
   ConversationRow,
+  DiscountCodeRedemptionRow,
+  DiscountCodeRow,
+  DiscountCodeStatus,
+  DiscountCodeType,
   GenerationAttemptRow,
   GenerationMode,
   GenerationTaskRow,
@@ -28,6 +43,8 @@ import type {
   PublicAdminSettings,
   PublicCanvasProject,
   PublicConversation,
+  PublicDiscountCode,
+  PublicDiscountRedemption,
   PublicConversationMessage,
   PublicImageProviderChannel,
   PublicImage,
@@ -195,6 +212,10 @@ export interface AiCreditOrderRow {
   status: "pending" | "paid";
   created_at: string;
   paid_at: string | null;
+  discount_code_id: string | null;
+  units_original: number | null;
+  units_charged: number | null;
+  discount_fen: number;
 }
 
 type AppSettingKey =
@@ -759,6 +780,44 @@ function initializeSchema(database: DatabaseSync): void {
 
     CREATE INDEX IF NOT EXISTS idx_generation_attempts_started
       ON generation_attempts (started_at);
+
+    CREATE TABLE IF NOT EXISTS discount_codes (
+      id TEXT PRIMARY KEY,
+      code TEXT NOT NULL UNIQUE,
+      name TEXT,
+      type TEXT NOT NULL CHECK (type IN ('percent', 'amount', 'bonus')),
+      value INTEGER NOT NULL,
+      min_units INTEGER NOT NULL DEFAULT 1,
+      max_uses INTEGER,
+      per_user_limit INTEGER NOT NULL DEFAULT 1,
+      starts_at TEXT,
+      expires_at TEXT,
+      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
+      used_count INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_discount_codes_status
+      ON discount_codes (status, created_at);
+
+    CREATE TABLE IF NOT EXISTS discount_code_redemptions (
+      id TEXT PRIMARY KEY,
+      code_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      order_id TEXT NOT NULL UNIQUE,
+      units_original INTEGER NOT NULL,
+      units_charged INTEGER NOT NULL,
+      credit_count INTEGER NOT NULL,
+      discount_fen INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_discount_redemptions_code
+      ON discount_code_redemptions (code_id, created_at);
+
+    CREATE INDEX IF NOT EXISTS idx_discount_redemptions_code_user
+      ON discount_code_redemptions (code_id, user_id);
   `);
   ensureColumn(database, "generation_tasks", "user_id", "TEXT");
   ensureColumn(database, "generation_tasks", "conversation_id", "TEXT");
@@ -782,6 +841,11 @@ function initializeSchema(database: DatabaseSync): void {
   ensureColumn(database, "users", "status", "TEXT NOT NULL DEFAULT 'active'");
   ensureColumn(database, "users", "monthly_quota", "INTEGER");
   ensureColumn(database, "users", "external_id", "TEXT");
+  // 折扣订单的留痕：老库里的历史订单这几列为 NULL / 0，等于「无折扣」。
+  ensureColumn(database, "ai_credit_orders", "discount_code_id", "TEXT");
+  ensureColumn(database, "ai_credit_orders", "units_original", "INTEGER");
+  ensureColumn(database, "ai_credit_orders", "units_charged", "INTEGER");
+  ensureColumn(database, "ai_credit_orders", "discount_fen", "INTEGER NOT NULL DEFAULT 0");
   database.exec(`
     CREATE INDEX IF NOT EXISTS idx_generation_tasks_user
       ON generation_tasks (user_id, created_at);
@@ -801,6 +865,9 @@ function initializeSchema(database: DatabaseSync): void {
 
     CREATE INDEX IF NOT EXISTS idx_canvas_projects_user
       ON canvas_projects (user_id);
+
+    CREATE INDEX IF NOT EXISTS idx_ai_credit_orders_discount
+      ON ai_credit_orders (discount_code_id, user_id, status);
   `);
   seedDefaultGroups(database);
 }
@@ -1324,6 +1391,10 @@ export function createAiCreditOrder(input: {
   userId: string;
   creditCount: number;
   totalPriceFen: number;
+  discountCodeId?: string | null;
+  unitsOriginal?: number | null;
+  unitsCharged?: number | null;
+  discountFen?: number;
 }): AiCreditOrderRow {
   const orderId = input.orderId.trim();
   if (!orderId) {
@@ -1337,12 +1408,25 @@ export function createAiCreditOrder(input: {
   getDb()
     .prepare(
       `
-      INSERT INTO ai_credit_orders (order_id, user_id, credit_count, total_price_fen, status, created_at, paid_at)
-      VALUES (?, ?, ?, ?, 'pending', ?, NULL)
+      INSERT INTO ai_credit_orders (
+        order_id, user_id, credit_count, total_price_fen, status, created_at, paid_at,
+        discount_code_id, units_original, units_charged, discount_fen
+      )
+      VALUES (?, ?, ?, ?, 'pending', ?, NULL, ?, ?, ?, ?)
       ON CONFLICT(order_id) DO NOTHING
     `,
     )
-    .run(orderId, input.userId, creditCount, Math.max(Math.trunc(input.totalPriceFen), 0), now);
+    .run(
+      orderId,
+      input.userId,
+      creditCount,
+      Math.max(Math.trunc(input.totalPriceFen), 0),
+      now,
+      input.discountCodeId?.trim() || null,
+      input.unitsOriginal == null ? null : Math.max(Math.trunc(input.unitsOriginal), 0),
+      input.unitsCharged == null ? null : Math.max(Math.trunc(input.unitsCharged), 0),
+      Math.max(Math.trunc(input.discountFen ?? 0), 0),
+    );
 
   const order = getAiCreditOrder(orderId);
   if (!order) {
@@ -1384,6 +1468,7 @@ export function markAiCreditOrderPaidAndGrant(orderId: string, userId: string): 
       database.prepare("UPDATE users SET monthly_quota = ?, updated_at = ? WHERE id = ?").run(nextQuota, paidAt, userId);
       database.prepare("UPDATE ai_credit_orders SET status = 'paid', paid_at = ? WHERE order_id = ?").run(paidAt, normalizedOrderId);
       granted = true;
+      recordDiscountRedemptionForPaidOrder(database, order, paidAt);
     }
 
     database.exec("COMMIT");
@@ -1494,6 +1579,415 @@ export function deductUserAiImageCredits(input: {
 
 function normalizeCreditCount(value: number): number {
   return Math.max(Math.trunc(value), 0);
+}
+
+// ---------------------------------------------------------------------------
+// 折扣码
+// ---------------------------------------------------------------------------
+
+/**
+ * 并发保护窗口：下单后二维码还没扫的这段时间，订单是 pending，
+ * 还没写 redemption。把这个窗口内的 pending 单也算进「已用」，
+ * 避免同一个人连开多单把每人上限刷穿。超过窗口的 pending 视为弃单，名额放回。
+ */
+const discountPendingHoldMs = 2 * 60 * 60 * 1000;
+
+export interface CreateDiscountCodeInput {
+  code?: string | null;
+  name?: string | null;
+  type: DiscountCodeType;
+  value: number;
+  minUnits?: number;
+  maxUses?: number | null;
+  perUserLimit?: number;
+  startsAt?: string | null;
+  expiresAt?: string | null;
+  status?: DiscountCodeStatus;
+}
+
+export type UpdateDiscountCodeInput = Partial<CreateDiscountCodeInput>;
+
+export function listDiscountCodes(): DiscountCodeRow[] {
+  return castRows<DiscountCodeRow>(
+    getDb().prepare("SELECT * FROM discount_codes ORDER BY created_at DESC LIMIT 500").all(),
+  );
+}
+
+export function getDiscountCodeById(id: string): DiscountCodeRow | null {
+  return castRow<DiscountCodeRow>(
+    getDb().prepare("SELECT * FROM discount_codes WHERE id = ? LIMIT 1").get(id.trim()),
+  );
+}
+
+export function getDiscountCodeByCode(code: string): DiscountCodeRow | null {
+  const normalized = normalizeDiscountCode(code);
+  if (!normalized) {
+    return null;
+  }
+  return castRow<DiscountCodeRow>(
+    getDb().prepare("SELECT * FROM discount_codes WHERE code = ? LIMIT 1").get(normalized),
+  );
+}
+
+export function createDiscountCode(input: CreateDiscountCodeInput): DiscountCodeRow {
+  const database = getDb();
+  const type = input.type;
+  const value = Math.trunc(input.value);
+  const valueError = validateDiscountValue(type, value);
+  if (valueError) {
+    throw badRequest(valueError);
+  }
+
+  const explicitCode = normalizeDiscountCode(input.code ?? "");
+  if (explicitCode && !isValidDiscountCode(explicitCode)) {
+    throw badRequest("折扣码只能是 4-32 位大写字母或数字");
+  }
+  const code = explicitCode || generateUniqueDiscountCode(database);
+  if (castRow<DiscountCodeRow>(database.prepare("SELECT * FROM discount_codes WHERE code = ? LIMIT 1").get(code))) {
+    throw badRequest("折扣码已存在");
+  }
+
+  const now = nowIso();
+  const id = createId("dcode");
+  database
+    .prepare(
+      `
+      INSERT INTO discount_codes (
+        id, code, name, type, value, min_units, max_uses, per_user_limit,
+        starts_at, expires_at, status, used_count, created_at, updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+    `,
+    )
+    .run(
+      id,
+      code,
+      normalizeDiscountName(input.name),
+      type,
+      value,
+      normalizePositiveInt(input.minUnits, 1),
+      normalizeNullablePositiveInt(input.maxUses),
+      normalizePositiveInt(input.perUserLimit, 1),
+      normalizeIsoDate(input.startsAt),
+      normalizeIsoDate(input.expiresAt),
+      input.status ?? "active",
+      now,
+      now,
+    );
+
+  const created = getDiscountCodeById(id);
+  if (!created) {
+    throw new Error("折扣码创建失败");
+  }
+  return created;
+}
+
+export function updateDiscountCode(id: string, input: UpdateDiscountCodeInput): DiscountCodeRow {
+  const existing = getDiscountCodeById(id);
+  if (!existing) {
+    throw badRequest("折扣码不存在");
+  }
+
+  const type = input.type ?? existing.type;
+  const value = input.value === undefined ? existing.value : Math.trunc(input.value);
+  const valueError = validateDiscountValue(type, value);
+  if (valueError) {
+    throw badRequest(valueError);
+  }
+
+  let code = existing.code;
+  if (input.code !== undefined && input.code !== null) {
+    const normalized = normalizeDiscountCode(input.code);
+    if (!isValidDiscountCode(normalized)) {
+      throw badRequest("折扣码只能是 4-32 位大写字母或数字");
+    }
+    if (normalized !== existing.code) {
+      const clash = getDiscountCodeByCode(normalized);
+      if (clash) {
+        throw badRequest("折扣码已存在");
+      }
+    }
+    code = normalized;
+  }
+
+  getDb()
+    .prepare(
+      `
+      UPDATE discount_codes
+      SET code = ?, name = ?, type = ?, value = ?, min_units = ?, max_uses = ?, per_user_limit = ?,
+          starts_at = ?, expires_at = ?, status = ?, updated_at = ?
+      WHERE id = ?
+    `,
+    )
+    .run(
+      code,
+      input.name === undefined ? existing.name : normalizeDiscountName(input.name),
+      type,
+      value,
+      input.minUnits === undefined ? existing.min_units : normalizePositiveInt(input.minUnits, 1),
+      input.maxUses === undefined ? existing.max_uses : normalizeNullablePositiveInt(input.maxUses),
+      input.perUserLimit === undefined ? existing.per_user_limit : normalizePositiveInt(input.perUserLimit, 1),
+      input.startsAt === undefined ? existing.starts_at : normalizeIsoDate(input.startsAt),
+      input.expiresAt === undefined ? existing.expires_at : normalizeIsoDate(input.expiresAt),
+      input.status ?? existing.status,
+      nowIso(),
+      existing.id,
+    );
+
+  const updated = getDiscountCodeById(existing.id);
+  if (!updated) {
+    throw new Error("折扣码更新失败");
+  }
+  return updated;
+}
+
+/** 软删：只停用，不删历史核销记录。 */
+export function disableDiscountCode(id: string): DiscountCodeRow {
+  const existing = getDiscountCodeById(id);
+  if (!existing) {
+    throw badRequest("折扣码不存在");
+  }
+  getDb()
+    .prepare("UPDATE discount_codes SET status = 'disabled', updated_at = ? WHERE id = ?")
+    .run(nowIso(), existing.id);
+  return getDiscountCodeById(existing.id) ?? existing;
+}
+
+/** 某人已经用掉这个码几次：已支付核销 + 还在保护窗口内的 pending 订单。 */
+export function countUserDiscountRedemptions(codeId: string, userId: string): number {
+  const normalizedCodeId = codeId.trim();
+  const normalizedUserId = userId.trim();
+  if (!normalizedCodeId || !normalizedUserId) {
+    return 0;
+  }
+  const holdSince = new Date(Date.now() - discountPendingHoldMs).toISOString();
+  const row = castRow<{ count: number }>(
+    getDb()
+      .prepare(
+        `
+        SELECT
+          (SELECT COUNT(*) FROM discount_code_redemptions WHERE code_id = ? AND user_id = ?)
+          + (
+            SELECT COUNT(*) FROM ai_credit_orders
+            WHERE discount_code_id = ? AND user_id = ? AND status = 'pending' AND created_at >= ?
+          ) AS count
+      `,
+      )
+      .get(normalizedCodeId, normalizedUserId, normalizedCodeId, normalizedUserId, holdSince),
+  );
+  return row?.count ?? 0;
+}
+
+export function listDiscountRedemptions(codeId: string): PublicDiscountRedemption[] {
+  const rows = castRows<DiscountCodeRedemptionRow & { user_name: string | null }>(
+    getDb()
+      .prepare(
+        `
+        SELECT r.*, u.name AS user_name
+        FROM discount_code_redemptions r
+        LEFT JOIN users u ON u.id = r.user_id
+        WHERE r.code_id = ?
+        ORDER BY r.created_at DESC
+        LIMIT 500
+      `,
+      )
+      .all(codeId.trim()),
+  );
+  return rows.map((row) => ({
+    id: row.id,
+    userId: row.user_id,
+    userName: row.user_name,
+    orderId: row.order_id,
+    unitsOriginal: row.units_original,
+    unitsCharged: row.units_charged,
+    creditCount: row.credit_count,
+    discountFen: row.discount_fen,
+    createdAt: row.created_at,
+  }));
+}
+
+export function toDiscountCodeDefinition(row: DiscountCodeRow): DiscountCodeDefinition {
+  return {
+    code: row.code,
+    type: row.type,
+    value: row.value,
+    minUnits: row.min_units,
+    maxUses: row.max_uses,
+    perUserLimit: row.per_user_limit,
+    startsAt: row.starts_at,
+    expiresAt: row.expires_at,
+    status: row.status,
+  };
+}
+
+export function toPublicDiscountCode(row: DiscountCodeRow): PublicDiscountCode {
+  return {
+    id: row.id,
+    code: row.code,
+    name: row.name,
+    type: row.type,
+    value: row.value,
+    minUnits: row.min_units,
+    maxUses: row.max_uses,
+    perUserLimit: row.per_user_limit,
+    startsAt: row.starts_at,
+    expiresAt: row.expires_at,
+    status: row.status,
+    usedCount: row.used_count,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export type ResolvedDiscount =
+  | { ok: true; row: DiscountCodeRow; preview: DiscountPreview }
+  | { ok: false; error: string };
+
+/**
+ * 预览与下单共用的入口：查码 → 校验 → 核算。
+ * 错误只回中文原因，绝不回折扣码内部 id。
+ */
+export function resolveDiscountForPurchase(input: {
+  userId: string;
+  code: string;
+  unitCount: number;
+}): ResolvedDiscount {
+  const code = normalizeDiscountCode(input.code);
+  if (!code || !isValidDiscountCode(code)) {
+    return { ok: false, error: "折扣码不存在" };
+  }
+  const row = getDiscountCodeByCode(code);
+  if (!row) {
+    return { ok: false, error: "折扣码不存在" };
+  }
+  const definition = toDiscountCodeDefinition(row);
+  const units = Math.max(Math.trunc(input.unitCount) || 0, 1);
+  const error = validateDiscountCodeUsable(definition, {
+    now: new Date(),
+    usedCount: row.used_count,
+    userUsedCount: countUserDiscountRedemptions(row.id, input.userId),
+    units,
+  });
+  if (error) {
+    return { ok: false, error };
+  }
+  return { ok: true, row, preview: computeDiscount(units, definition) };
+}
+
+/**
+ * 支付入账时在同一事务里补核销记录。
+ * 已经超限也照样入账（用户钱已经付了），只打日志，让运营去后台处理。
+ */
+function recordDiscountRedemptionForPaidOrder(
+  database: DatabaseSync,
+  order: AiCreditOrderRow,
+  paidAt: string,
+): void {
+  const codeId = order.discount_code_id;
+  if (!codeId) {
+    return;
+  }
+  const code = castRow<DiscountCodeRow>(
+    database.prepare("SELECT * FROM discount_codes WHERE id = ? LIMIT 1").get(codeId),
+  );
+  if (!code) {
+    console.warn(`[discount] 订单 ${order.order_id} 引用的折扣码已不存在，跳过核销记录`);
+    return;
+  }
+
+  if (code.max_uses !== null && code.used_count >= code.max_uses) {
+    console.warn(`[discount] 折扣码 ${code.code} 已达总上限 ${code.max_uses}，订单 ${order.order_id} 仍照常入账`);
+  }
+  const userUsed = castRow<{ count: number }>(
+    database
+      .prepare("SELECT COUNT(*) AS count FROM discount_code_redemptions WHERE code_id = ? AND user_id = ?")
+      .get(code.id, order.user_id),
+  );
+  if (code.per_user_limit > 0 && (userUsed?.count ?? 0) >= code.per_user_limit) {
+    console.warn(
+      `[discount] 折扣码 ${code.code} 对用户 ${order.user_id} 已达每人上限 ${code.per_user_limit}，订单 ${order.order_id} 仍照常入账`,
+    );
+  }
+
+  const inserted = database
+    .prepare(
+      `
+      INSERT OR IGNORE INTO discount_code_redemptions (
+        id, code_id, user_id, order_id, units_original, units_charged, credit_count, discount_fen, created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `,
+    )
+    .run(
+      createId("dredm"),
+      code.id,
+      order.user_id,
+      order.order_id,
+      order.units_original ?? 0,
+      order.units_charged ?? 0,
+      normalizeCreditCount(order.credit_count),
+      Math.max(Math.trunc(order.discount_fen ?? 0), 0),
+      paidAt,
+    );
+
+  if (inserted.changes === 1) {
+    database
+      .prepare("UPDATE discount_codes SET used_count = used_count + 1, updated_at = ? WHERE id = ?")
+      .run(paidAt, code.id);
+  }
+}
+
+function generateUniqueDiscountCode(database: DatabaseSync): string {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    let candidate = "";
+    for (let index = 0; index < generatedDiscountCodeLength; index += 1) {
+      candidate += discountCodeAlphabet[crypto.randomInt(discountCodeAlphabet.length)];
+    }
+    const clash = castRow<{ id: string }>(
+      database.prepare("SELECT id FROM discount_codes WHERE code = ? LIMIT 1").get(candidate),
+    );
+    if (!clash) {
+      return candidate;
+    }
+  }
+  throw new Error("折扣码生成失败，请重试");
+}
+
+function normalizeDiscountName(value: string | null | undefined): string | null {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  return trimmed ? trimmed.slice(0, 60) : null;
+}
+
+function normalizePositiveInt(value: number | null | undefined, fallback: number): number {
+  if (value === null || value === undefined) {
+    return fallback;
+  }
+  const parsed = Math.trunc(value);
+  return Number.isFinite(parsed) && parsed >= 1 ? parsed : fallback;
+}
+
+function normalizeNullablePositiveInt(value: number | null | undefined): number | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const parsed = Math.trunc(value);
+  return Number.isFinite(parsed) && parsed >= 1 ? parsed : null;
+}
+
+function normalizeIsoDate(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const parsed = Date.parse(trimmed);
+  return Number.isNaN(parsed) ? null : new Date(parsed).toISOString();
+}
+
+function badRequest(message: string): Error {
+  return Object.assign(new Error(message), { status: 400 });
 }
 
 export function getAppSetting(key: AppSettingKey): string | null {
