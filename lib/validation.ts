@@ -5,7 +5,7 @@ import {
   normalizeDiscountCode,
   validateDiscountValue,
 } from "./discount";
-import { imageQualityOptions, sizeOptions } from "./image-options";
+import { imageQualityOptions, sizeOptions, type ImageQualityOption, type ImageSizeOption } from "./image-options";
 import {
   discountCodeStatuses,
   discountCodeTypes,
@@ -186,6 +186,7 @@ export const updateAdminSettingsSchema = z.object({
   siteSubtitle: z.string().trim().min(1).max(120).optional(),
   registrationEnabled: z.boolean().optional(),
   registrationDefaultGroupId: z.string().trim().min(1).optional(),
+  apiEnabled: z.boolean().optional(),
 });
 
 export const openAIOAuthExchangeSchema = z.object({
@@ -361,3 +362,66 @@ export const upsertDiscountCodeSchema = discountCodeBaseSchema.superRefine(refin
 /** 更新折扣码：所有字段可选，缺省表示不改；type 与 value 只有同时出现才在这里校验，
  * 单独改一个时由 lib/db 的 updateDiscountCode 合并旧值后兜底。 */
 export const updateDiscountCodeSchema = discountCodeBaseSchema.partial().superRefine(refineDiscountCodeInput);
+
+/* ---------------------------------------------------------------------------
+ * 开放 API（/api/v1）与自助密钥
+ * 字段名走契约里的 snake_case；multipart 上来全是字符串，所以这里都做宽松归一化。
+ * ------------------------------------------------------------------------- */
+
+export const createApiKeySchema = z.object({
+  name: z.string().trim().min(1, "密钥名称不能为空").max(40, "密钥名称最多 40 个字符"),
+});
+
+/** 空串 / 缺省一律落到 fallback，再按枚举校验，错的时候给中文提示。 */
+function enumWithFallback<T extends string>(values: readonly T[], fallback: T, message: string) {
+  return z
+    .union([z.string(), z.number(), z.null(), z.undefined()])
+    .transform((value) => (value === null || value === undefined || String(value).trim() === "" ? fallback : String(value).trim()))
+    .refine((value) => (values as readonly string[]).includes(value), message)
+    .transform((value) => value as T);
+}
+
+const apiSizeOption = enumWithFallback<ImageSizeOption>(sizeOptions, "auto", "size 取值不在支持范围内");
+const apiQualityOption = enumWithFallback<ImageQualityOption>(imageQualityOptions, "high", "quality 只能是 auto/low/medium/high");
+const apiResponseFormat = enumWithFallback<"url" | "b64_json">(["url", "b64_json"], "url", "response_format 只能是 url 或 b64_json");
+
+const apiWaitFlag = z
+  .union([z.boolean(), z.string(), z.number(), z.null(), z.undefined()])
+  .transform((value) => {
+    if (typeof value === "boolean") {
+      return value;
+    }
+    if (typeof value === "number") {
+      return value === 1;
+    }
+    if (typeof value === "string") {
+      return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
+    }
+    return false;
+  });
+
+const apiImageCount = z
+  .union([z.number(), z.string(), z.null(), z.undefined()])
+  .transform((value) => (value === null || value === undefined || String(value).trim() === "" ? 1 : Number(value)))
+  .refine((value) => value === 1 || value === 2 || value === 4, "n 只能是 1、2 或 4")
+  .transform((value) => value as 1 | 2 | 4);
+
+export const apiV1GenerationSchema = z.object({
+  prompt: z.string().trim().min(1, "prompt 不能为空").max(8000, "prompt 过长"),
+  negative_prompt: nullableString,
+  size: apiSizeOption,
+  quality: apiQualityOption,
+  n: apiImageCount,
+  template_id: nullableString,
+  wait: apiWaitFlag,
+  response_format: apiResponseFormat,
+});
+
+export const apiV1EditSchema = apiV1GenerationSchema.extend({
+  // JSON 调用时用 image_base64 代替 multipart 的 image 文件，data URL 与纯 base64 都收。
+  image_base64: z.array(z.string().trim().min(1, "image_base64 不能为空")).min(1).max(maxReferenceImageCount).optional(),
+});
+
+export const apiV1ListTasksQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+});

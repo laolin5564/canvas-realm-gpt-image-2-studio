@@ -1,15 +1,20 @@
 import crypto from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
+import { hashApiKeySecret, isApiKeySecret, parseBearerToken } from "./api-keys";
+import { apiError } from "./api-v1";
 import {
   countUsers,
   createSession,
   deleteSessionByTokenHash,
+  getActiveUserApiKeyByHash,
   getDefaultGroup,
   getRegistrationSettings,
   getSessionByTokenHash,
   getUserById,
   getUserGroup,
   getUserQuota,
+  isApiEnabled,
+  recordUserApiKeyUsage,
 } from "./db";
 import type { CurrentUser, UserRow } from "./types";
 
@@ -137,6 +142,62 @@ export function requireUser(request: NextRequest): CurrentUser {
     throw new AuthError("请先登录", 401);
   }
   return user;
+}
+
+export interface ApiKeyPrincipal {
+  user: CurrentUser;
+  keyId: string;
+}
+
+/**
+ * last_used_at / request_count 每把密钥最多一分钟写一次库，
+ * 间隔内的调用先在内存里攒着，下次落盘时一起加上，避免每请求一次写。
+ */
+const apiKeyUsageFlushIntervalMs = 60_000;
+const apiKeyUsageBuffer = new Map<string, { pending: number; flushedAt: number }>();
+
+function recordApiKeyUsageThrottled(keyId: string, nowMs = Date.now()): void {
+  const buffered = apiKeyUsageBuffer.get(keyId);
+  const pending = (buffered?.pending ?? 0) + 1;
+  if (buffered && nowMs - buffered.flushedAt < apiKeyUsageFlushIntervalMs) {
+    apiKeyUsageBuffer.set(keyId, { pending, flushedAt: buffered.flushedAt });
+    return;
+  }
+
+  apiKeyUsageBuffer.set(keyId, { pending: 0, flushedAt: nowMs });
+  try {
+    recordUserApiKeyUsage(keyId, pending);
+  } catch {
+    // 用量统计写失败不该拖垮整个调用。
+  }
+}
+
+/** 站点设置里的开放 API 总开关；关掉之后 /api/v1 与密钥创建一律 403 api_disabled。 */
+export function assertApiEnabled(): void {
+  if (!isApiEnabled()) {
+    throw apiError("api_disabled", "站点已关闭开放 API，请联系管理员开启");
+  }
+}
+
+/** Bearer 密钥鉴权：解析 → sha256 → 查有效密钥 → 用户仍启用 → 记一次用量。 */
+export function requireApiKeyUser(request: NextRequest): ApiKeyPrincipal {
+  const token = parseBearerToken(request.headers.get("authorization"));
+  if (!token || !isApiKeySecret(token)) {
+    throw apiError("unauthorized", "缺少或无效的 API 密钥，请在 Authorization 头里带上 Bearer hj_...");
+  }
+
+  const key = getActiveUserApiKeyByHash(hashApiKeySecret(token));
+  if (!key) {
+    throw apiError("unauthorized", "API 密钥无效或已撤销");
+  }
+
+  const user = getUserById(key.user_id);
+  if (!user || user.status === "disabled") {
+    throw apiError("unauthorized", "API 密钥对应的账号已被禁用");
+  }
+
+  recordApiKeyUsageThrottled(key.id);
+  return { user: toCurrentUser(user), keyId: key.id };
 }
 
 export function requireAdmin(request: NextRequest): CurrentUser {

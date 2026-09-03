@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { apiKeyRateLimit, consumeToken, rateLimitedError, type TokenBucketState } from "./api-v1";
 import { AuthError } from "./auth";
 
 interface LoginAttemptState {
@@ -129,4 +130,45 @@ function recordAttemptFailure(
     state.blockedUntil = currentTime + attemptBlockMs;
   }
   store.set(key, state);
+}
+
+/* ---------------------------------------------------------------------------
+ * 开放 API：每把密钥 60 请求/分钟的内存令牌桶。
+ * 桶状态只在本进程内存里，多实例部署时是「每实例 60/分钟」，够挡住脚本刷量。
+ * ------------------------------------------------------------------------- */
+
+const apiKeyBuckets = new Map<string, TokenBucketState>();
+const apiKeyBucketIdleMs = 5 * 60 * 1000;
+
+function cleanupIdleApiKeyBuckets(currentTime: number): void {
+  if (apiKeyBuckets.size < 1000) {
+    return;
+  }
+  for (const [key, state] of apiKeyBuckets.entries()) {
+    if (currentTime - state.updatedAtMs > apiKeyBucketIdleMs) {
+      apiKeyBuckets.delete(key);
+    }
+  }
+}
+
+export function acquireApiKeyToken(keyId: string, currentTime = now()): { allowed: boolean; retryAfterSeconds: number } {
+  cleanupIdleApiKeyBuckets(currentTime);
+  const result = consumeToken(apiKeyBuckets.get(keyId), apiKeyRateLimit, currentTime);
+  apiKeyBuckets.set(keyId, result.state);
+  return { allowed: result.allowed, retryAfterSeconds: result.retryAfterSeconds };
+}
+
+export function assertApiKeyRateLimit(keyId: string): void {
+  const result = acquireApiKeyToken(keyId);
+  if (!result.allowed) {
+    throw rateLimitedError(
+      `请求过于频繁，每把密钥限 ${apiKeyRateLimit.capacity} 次/分钟，请 ${result.retryAfterSeconds} 秒后重试`,
+      result.retryAfterSeconds,
+    );
+  }
+}
+
+/** 仅供测试重置进程内的桶状态。 */
+export function resetApiKeyRateLimit(): void {
+  apiKeyBuckets.clear();
 }

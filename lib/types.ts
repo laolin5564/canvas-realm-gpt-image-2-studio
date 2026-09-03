@@ -32,6 +32,13 @@ export interface TemplateVariableDefinition {
   options: TemplateVariableOption[];
 }
 
+export const taskSources = ["web", "api"] as const;
+/** 任务来源：web 为站内工作台，api 为用户拿自己的密钥直接调开放接口。 */
+export type TaskSource = (typeof taskSources)[number];
+
+export const apiKeyStatuses = ["active", "revoked"] as const;
+export type ApiKeyStatus = (typeof apiKeyStatuses)[number];
+
 export const userRoles = ["admin", "member"] as const;
 export type UserRole = (typeof userRoles)[number];
 
@@ -105,6 +112,8 @@ export interface GenerationTaskRow {
   error_message: string | null;
   // 面向管理员的失败详情（状态码 + 上游原文），只在管理员接口里下发。
   error_detail: string | null;
+  // 'web'（默认）| 'api'：开放 API 建的任务不挂会话，历史页照常出图。
+  source: TaskSource;
   created_at: string;
   started_at: string | null;
   completed_at: string | null;
@@ -248,6 +257,29 @@ export interface SessionRow {
   token_hash: string;
   expires_at: string;
   created_at: string;
+}
+
+export interface UserApiKeyRow {
+  id: string;
+  user_id: string;
+  name: string;
+  key_prefix: string;
+  key_hash: string;
+  status: ApiKeyStatus;
+  last_used_at: string | null;
+  request_count: number;
+  created_at: string;
+  revoked_at: string | null;
+}
+
+export interface PublicUserApiKey {
+  id: string;
+  name: string;
+  prefix: string;
+  status: ApiKeyStatus;
+  lastUsedAt: string | null;
+  requestCount: number;
+  createdAt: string;
 }
 
 export type OpenAIOAuthAccountStatus = "active" | "error" | "disabled";
@@ -596,6 +628,8 @@ export interface PublicAdminSettings {
   registrationEnabled: boolean;
   registrationDefaultGroupId: string;
   registrationDefaultQuota: number;
+  /** 开放 API 总开关：关掉之后 /api/v1 与密钥创建一律 403 api_disabled。 */
+  apiEnabled: boolean;
 }
 
 export interface SystemUpdateInfo {
