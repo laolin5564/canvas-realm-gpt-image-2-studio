@@ -100,24 +100,44 @@ async function smallerOf(
   return candidate.bytes.byteLength < current.bytes.byteLength ? candidate : current;
 }
 
+// sharp 默认的输入像素上限（0x3fff × 0x3fff ≈ 2.68 亿像素），超过它 sharp 直接拒绝解码，防止内存炸弹。
+export const maxReferenceImagePixels = 0x3fff * 0x3fff;
+
+/**
+ * sharp 解码失败（损坏文件 / 伪装魔数 / 像素数超上限）：换渠道也是同样的结果，
+ * 抛成中文、能被 image-retry 的 nonRetryablePatterns 命中的错误，直接终止任务。
+ */
+export class ReferenceImageDecodeError extends Error {
+  constructor(fileName: string, cause: unknown) {
+    const limit = Math.floor(maxReferenceImagePixels / 1_000_000);
+    super(`参考图无法解码或尺寸过大（${fileName}，像素数上限约 ${limit} 百万），请更换图片后重试`, { cause });
+    this.name = "ReferenceImageDecodeError";
+  }
+}
+
 async function compressWithProfile(
   image: ReferenceImageUpload,
   profile: CompressionProfile,
 ): Promise<ReferenceImageUpload> {
-  const bytes = await sharp(Buffer.from(image.bytes))
-    .rotate()
-    .resize({
-      width: profile.maxDimension,
-      height: profile.maxDimension,
-      fit: "inside",
-      withoutEnlargement: true,
-    })
-    .webp({
-      quality: profile.quality,
-      alphaQuality: Math.max(profile.quality, 70),
-      effort: 4,
-    })
-    .toBuffer();
+  let bytes: Buffer;
+  try {
+    bytes = await sharp(Buffer.from(image.bytes))
+      .rotate()
+      .resize({
+        width: profile.maxDimension,
+        height: profile.maxDimension,
+        fit: "inside",
+        withoutEnlargement: true,
+      })
+      .webp({
+        quality: profile.quality,
+        alphaQuality: Math.max(profile.quality, 70),
+        effort: 4,
+      })
+      .toBuffer();
+  } catch (error) {
+    throw new ReferenceImageDecodeError(image.fileName, error);
+  }
   return {
     bytes: new Uint8Array(bytes),
     mimeType: "image/webp",

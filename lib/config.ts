@@ -77,6 +77,9 @@ export const appConfig = {
   sub2apiHostHeader: normalizeHttpHostHeader(process.env.SUB2API_HOST_HEADER),
   sub2apiMaxUploadBytes: readNumberEnv("SUB2API_MAX_UPLOAD_BYTES", 15_000_000),
   sub2apiMaxImageBytes: readNumberEnv("SUB2API_MAX_IMAGE_BYTES", 4_000_000),
+  // 大请求体先只发头、等网关 100 Continue 再发正文。默认关：priority 2 渠道经 Cloudflare，
+  // Expect 在 CF 上的行为未经验证（若被回 417 会直接杀掉备用渠道），只在确认网关支持后显式打开。
+  originFetchExpectContinue: readBooleanEnv("ORIGIN_FETCH_EXPECT_CONTINUE"),
   sub2apiApiKey: process.env.SUB2API_API_KEY || "",
   imageEditInputFidelity: process.env.IMAGE_EDIT_INPUT_FIDELITY ?? "high",
   imagePublicBaseUrl: (process.env.IMAGE_PUBLIC_BASE_URL || "").trim().replace(/\/+$/, ""),

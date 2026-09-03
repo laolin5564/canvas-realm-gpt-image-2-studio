@@ -27,9 +27,18 @@ export function isPayloadTooLargeError(error: unknown): boolean {
   return imageErrorStatus(error) === 413;
 }
 
-/** 默认的「不在本渠道补发、直接切渠道」判定：超时 或 413。 */
+/**
+ * 3xx（源站主机块在做跳转）：渠道的 baseUrl 协议或 Host 主机块配错了，
+ * 同渠道再发只会再吃一个 301，直接换下一个渠道。
+ */
+export function isRedirectError(error: unknown): boolean {
+  const status = imageErrorStatus(error);
+  return status !== null && status >= 300 && status < 400;
+}
+
+/** 默认的「不在本渠道补发、直接切渠道」判定：超时、413 或 3xx。 */
 export function shouldSwitchChannelByDefault(error: unknown): boolean {
-  return isImageTimeoutError(error) || isPayloadTooLargeError(error);
+  return isImageTimeoutError(error) || isPayloadTooLargeError(error) || isRedirectError(error);
 }
 
 export interface ImageBatchOptions<TImage> {
@@ -46,7 +55,7 @@ export interface ImageBatchOptions<TImage> {
   isAbort: (error: unknown) => boolean;
   isRetryable: (error: unknown) => boolean;
   /**
-   * 可重试、但不该在本渠道原地补发的错误（默认：超时 或 413）。命中就直接上抛，
+   * 可重试、但不该在本渠道原地补发的错误（默认：超时、413 或 3xx）。命中就直接上抛，
    * 交给 runAcrossChannels 换下一个渠道。
    */
   shouldSwitchChannel?: (error: unknown) => boolean;
@@ -111,8 +120,8 @@ export async function runImageGenerationBatches<TImage>(options: ImageBatchOptio
       throw fatal;
     }
 
-    // 超时 / 413 不在本渠道补发：直接上抛，让 failover 去下一个渠道
-    //（超时是避免 300s + 300s 的连环等待，413 是同一份请求体再发也一样太大）。
+    // 超时 / 413 / 3xx 不在本渠道补发：直接上抛，让 failover 去下一个渠道
+    //（超时是避免 300s + 300s 的连环等待，413 是同一份请求体再发也一样太大，3xx 是渠道配置问题）。
     const switchNow = failures.find((reason) => shouldSwitchChannel(reason));
     if (switchNow !== undefined) {
       throw switchNow;

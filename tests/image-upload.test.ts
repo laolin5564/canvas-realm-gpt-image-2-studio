@@ -120,6 +120,80 @@ describe("参考图上传预算", () => {
     expect(result[1]?.fileName).toBe("tiny.jpg");
   });
 
+  test("首档按最长边 2048 等比缩小：3000×1000 → 2048×683", async () => {
+    const wide = await makeNoisePng(3000, 1000);
+    const result = await fitReferenceImagesToBudget([upload(wide, "wide.png")], wide.byteLength - 1);
+
+    expect(result[0]?.mimeType).toBe("image/webp");
+    const metadata = await sharp(Buffer.from(result[0]?.bytes ?? new Uint8Array())).metadata();
+    expect(metadata.width).toBe(2048);
+    expect(metadata.height).toBe(683);
+  });
+
+  test("EXIF 方向会被转正：orientation=6 的 600×300 JPEG 输出 300×600 且不再带 orientation", async () => {
+    const pixels = Buffer.alloc(600 * 300 * 3);
+    let state = 0x5eed;
+    for (let index = 0; index < pixels.length; index += 1) {
+      state ^= state << 13;
+      state ^= state >>> 17;
+      state ^= state << 5;
+      pixels[index] = state & 0xff;
+    }
+    const rotatedJpeg = await sharp(pixels, { raw: { width: 600, height: 300, channels: 3 } })
+      .jpeg({ quality: 95 })
+      .withMetadata({ orientation: 6 })
+      .toBuffer();
+    expect((await sharp(rotatedJpeg).metadata()).orientation).toBe(6);
+
+    const result = await fitReferenceImagesToBudget(
+      [upload(new Uint8Array(rotatedJpeg), "rotated.jpg", "image/jpeg")],
+      rotatedJpeg.byteLength - 1,
+    );
+
+    expect(result[0]?.mimeType).toBe("image/webp");
+    const metadata = await sharp(Buffer.from(result[0]?.bytes ?? new Uint8Array())).metadata();
+    expect(metadata.width).toBe(300);
+    expect(metadata.height).toBe(600);
+    expect(metadata.orientation).toBe(undefined);
+  });
+
+  test("压缩不放大：200×200 小图被迫压缩后仍是 200×200", async () => {
+    const small = await makeNoisePng(200, 200);
+    const result = await fitReferenceImagesToBudget([upload(small, "small.png")], small.byteLength - 1);
+
+    expect(result[0]?.mimeType).toBe("image/webp");
+    const metadata = await sharp(Buffer.from(result[0]?.bytes ?? new Uint8Array())).metadata();
+    expect(metadata.width).toBe(200);
+    expect(metadata.height).toBe(200);
+  });
+
+  test("带透明通道的 PNG 压缩后仍保留 alpha", async () => {
+    const width = 900;
+    const height = 900;
+    const pixels = Buffer.alloc(width * height * 4);
+    let state = 0xa1fa;
+    for (let index = 0; index < pixels.length; index += 4) {
+      state ^= state << 13;
+      state ^= state >>> 17;
+      state ^= state << 5;
+      pixels[index] = state & 0xff;
+      pixels[index + 1] = (state >>> 8) & 0xff;
+      pixels[index + 2] = (state >>> 16) & 0xff;
+      pixels[index + 3] = ((index / 4) % width) * (255 / width);
+    }
+    const png = await sharp(pixels, { raw: { width, height, channels: 4 } }).png().toBuffer();
+
+    const result = await fitReferenceImagesToBudget(
+      [upload(new Uint8Array(png), "alpha.png")],
+      png.byteLength - 1,
+    );
+
+    expect(result[0]?.mimeType).toBe("image/webp");
+    const metadata = await sharp(Buffer.from(result[0]?.bytes ?? new Uint8Array())).metadata();
+    expect(metadata.hasAlpha).toBe(true);
+    expect(metadata.width).toBe(width);
+  });
+
   test("所有档位都压不进预算时抛出可识别的错误", async () => {
     const big = await makeNoisePng(800, 800);
     let message = "";

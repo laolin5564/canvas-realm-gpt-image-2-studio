@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   isImageTimeoutError,
   isPayloadTooLargeError,
+  isRedirectError,
   runAcrossChannels,
   runImageGenerationBatches,
   shouldSwitchChannelByDefault,
@@ -269,6 +270,56 @@ describe("413 请求体过大", () => {
     expect(shouldSwitchChannelByDefault(new UpstreamImageError("参考图太大", 413))).toBe(true);
     expect(shouldSwitchChannelByDefault(new DOMException("timed out", "TimeoutError"))).toBe(true);
     expect(shouldSwitchChannelByDefault(new UpstreamImageError("模型服务暂时不可用（503）", 503))).toBe(false);
+  });
+
+  test("3xx 也直接切渠道：同渠道补发只会再吃一个跳转", async () => {
+    expect(isRedirectError(new UpstreamImageError("生成服务暂时不可用", 301))).toBe(true);
+    expect(isRedirectError(new UpstreamImageError("生成服务暂时不可用", 307))).toBe(true);
+    expect(isRedirectError(new UpstreamImageError("参考图太大", 413))).toBe(false);
+    expect(isRedirectError(new Error("fetch failed"))).toBe(false);
+    expect(shouldSwitchChannelByDefault(new UpstreamImageError("生成服务暂时不可用", 301))).toBe(true);
+    expect(shouldSwitchChannelByDefault(new UpstreamImageError("生成服务暂时不可用", 308))).toBe(true);
+
+    const harness = createHarness([
+      async () => {
+        throw new UpstreamImageError("生成服务暂时不可用，请稍后重试。", 301);
+      },
+      async () => {
+        throw new Error("301 后不应该在同一渠道补发");
+      },
+    ]);
+
+    let failure: unknown = null;
+    try {
+      await harness.run({ total: 1, concurrency: 1 });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(harness.requestCount).toBe(1);
+    expect((failure as UpstreamImageError).status).toBe(301);
+  });
+
+  test("runAcrossChannels 遇 301 会走到下一个渠道", async () => {
+    const attempts: string[] = [];
+    const delivered: string[] = [];
+
+    await runAcrossChannels({
+      channels: ["直连源站", "CF 域名"],
+      run: async (channel) => {
+        attempts.push(channel);
+        if (channel === "直连源站") {
+          throw new UpstreamImageError("生成服务暂时不可用，请稍后重试。", 301);
+        }
+        delivered.push("ok");
+      },
+      isAbort,
+      isRetryable: isRetryableImageError,
+      exhaustedMessage: "所有模型渠道均调用失败",
+    });
+
+    expect(attempts.join(",")).toBe("直连源站,CF 域名");
+    expect(delivered.join(",")).toBe("ok");
   });
 
   test("413 直接上抛换渠道，不在同渠道原样补发", async () => {

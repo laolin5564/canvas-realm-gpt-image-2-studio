@@ -14,7 +14,8 @@ import { totalReferenceImageBytes } from "./image-upload";
 import { runAcrossChannels, runImageGenerationBatches, shouldSwitchChannelByDefault } from "./image-batch";
 import {
   createReferenceImageLoader,
-  describeReferencePayload,
+  buildImageEditForm,
+  formatUpstreamErrorDetail,
   sendWithPayloadTooLargeFallback,
   type ReferenceImageLoader,
 } from "./reference-images";
@@ -350,32 +351,21 @@ async function requestImageEdit(
     throw new Error("缺少参考图，无法调用图片编辑接口");
   }
 
-  // 每次发送都重新取 forUpload()：413 后 shrink 会换成缩小后的参考图，表单得重新拼。
-  const send = async (): Promise<unknown> => {
-    const uploadImages = await references.forUpload();
-    const referenceBytes = totalReferenceImageBytes(uploadImages);
-    const form = new FormData();
-    form.append("model", settings.imageModel);
-    for (const image of uploadImages) {
-      const blob = new Blob([new Uint8Array(image.bytes)], { type: image.mimeType });
-      form.append("image", blob, image.fileName);
-    }
-    form.append("prompt", buildPrompt(task, references.count));
-    form.append("n", String(quantity));
-    const apiSize = apiSizeForOption(task.size);
-    if (apiSize) {
-      form.append("size", apiSize);
-    }
-    const apiQuality = apiQualityForOption(task.quality);
-    if (apiQuality) {
-      form.append("quality", apiQuality);
-    }
-    if (appConfig.imageEditInputFidelity) {
-      form.append("input_fidelity", appConfig.imageEditInputFidelity);
-    }
+  // 槽位拿到手之后再取 forUpload() 拼表单：排队期间同批别的请求可能已经因 413 把参考图缩小了，
+  // 别拿着过期的大表单出门；413 后 shrink 换成缩小后的参考图，重发时表单也是重新拼的。
+  return withUpstreamImageSlot(() =>
+    sendWithPayloadTooLargeFallback(references, (uploadImages) => {
+      const referenceBytes = totalReferenceImageBytes(uploadImages);
+      const form = buildImageEditForm(uploadImages, {
+        model: settings.imageModel,
+        prompt: buildPrompt(task, references.count),
+        n: quantity,
+        size: apiSizeForOption(task.size),
+        quality: apiQualityForOption(task.quality),
+        inputFidelity: appConfig.imageEditInputFidelity,
+      });
 
-    return withUpstreamImageSlot(() =>
-      withAttemptTelemetry(task, settings, async () => {
+      return withAttemptTelemetry(task, settings, async () => {
         const response = await fetchWithOriginHost(`${settings.baseUrl}/images/edits`, {
           method: "POST",
           headers: {
@@ -387,11 +377,9 @@ async function requestImageEdit(
         }, settings.hostHeader);
 
         return readModelResponse(response, "image edit failed", settings, { referenceBytes });
-      }),
-    );
-  };
-
-  return sendWithPayloadTooLargeFallback(references, send);
+      });
+    }),
+  );
 }
 
 const emptyReferenceImageLoader: ReferenceImageLoader = {
@@ -534,17 +522,12 @@ async function readModelResponse(
     if (settings.provider === "openai_oauth" && response.status === 401 && settings.oauthAccountId) {
       updateOpenAIOAuthAccountStatus(settings.oauthAccountId, "error", message);
     }
-    // 413 时把本次请求体大小带进管理员详情，方便对照网关的 client_max_body_size；用户文案不变。
-    const payloadNote =
-      response.status === 413 && context.referenceBytes !== undefined
-        ? `（${describeReferencePayload(context.referenceBytes)}）`
-        : "";
-    // 带上 status，让上层区分「换渠道有救」（5xx/429/408/413）和「换几次都白搭」（其余 4xx）；
-    // detail 是给管理员看的原文，用户看到的仍然只有上面那句短文案。
+    // 带上 status，让上层区分「换渠道有救」（5xx/429/408/413/3xx）和「换几次都白搭」（其余 4xx）；
+    // detail 是给管理员看的原文（413 时附本次参考图体积），用户看到的仍然只有上面那句短文案。
     throw new UpstreamImageDetailError(
       message,
       response.status,
-      `${messagePrefix}${formatModelErrorDetail(response.status, text, fallback)}${payloadNote}`,
+      `${messagePrefix}${formatUpstreamErrorDetail(response.status, text, fallback, context.referenceBytes)}`,
     );
   }
 

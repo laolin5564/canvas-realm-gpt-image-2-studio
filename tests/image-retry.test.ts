@@ -12,6 +12,13 @@ describe("上游生图错误分类", () => {
     expect(isRetryableImageError(new UpstreamImageError("参考图请求体过大（413）", 413))).toBe(true);
   });
 
+  test("3xx 可以换渠道：源站主机块在跳转，是该渠道自己的 baseUrl/Host 配置问题", () => {
+    expect(isRetryableImageError(new UpstreamImageError("生成服务暂时不可用", 301))).toBe(true);
+    expect(isRetryableImageError(new UpstreamImageError("生成服务暂时不可用", 302))).toBe(true);
+    expect(isRetryableImageError(new UpstreamImageError("生成服务暂时不可用", 307))).toBe(true);
+    expect(isRetryableImageError(new UpstreamImageError("生成服务暂时不可用", 308))).toBe(true);
+  });
+
   test("除 408/413/429 之外的 4xx 不重试也不换渠道", () => {
     expect(isRetryableImageError(new UpstreamImageError("参数不合法", 400))).toBe(false);
     expect(isRetryableImageError(new UpstreamImageError("模型接口认证失败（401）", 401))).toBe(false);
@@ -25,6 +32,9 @@ describe("上游生图错误分类", () => {
     expect(isRetryableImageError(new Error("内容审核未通过：提示词涉及违规内容"))).toBe(false);
     expect(isRetryableImageError(new Error("invalid_request_error: unknown parameter"))).toBe(false);
     expect(isRetryableImageError(new Error("缺少参考图，无法调用图片编辑接口"))).toBe(false);
+    expect(
+      isRetryableImageError(new Error("参考图无法解码或尺寸过大（ref.png，像素数上限约 268 百万），请更换图片后重试")),
+    ).toBe(false);
   });
 
   test("网络错误与超时可以重试", () => {

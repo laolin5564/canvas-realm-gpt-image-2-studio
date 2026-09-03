@@ -16,6 +16,8 @@ EXCLUDES=(
   --exclude-dir=data
   --exclude-dir=backups
   --exclude=bun.lock
+  # tests/fixtures/origin-tls：origin-fetch 测试用的自签证书，不是真实凭据。
+  --exclude-dir=origin-tls
   --exclude='*.png'
   --exclude='*.jpg'
   --exclude='*.jpeg'

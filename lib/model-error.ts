@@ -34,6 +34,13 @@ function classifyModelError(status: number, text: string, fallback: string): Mod
     };
   }
 
+  if (status >= 300 && status < 400) {
+    return {
+      user: "生成服务暂时不可用，请稍后重试。",
+      admin: `源站返回重定向（${status}）：请检查该渠道 Base URL 的协议（http/https）与源站 Host 主机块配置——直连源站 IP 时，Host 对应的 server 块不能有 http→https 跳转（certbot 默认写法 return 301），生图接口不跟随重定向。`,
+    };
+  }
+
   if (status === 413) {
     return {
       user: "参考图太大，请压缩后重试或减少参考图数量。",
