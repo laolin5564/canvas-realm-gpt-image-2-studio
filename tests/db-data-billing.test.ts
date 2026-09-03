@@ -9,6 +9,7 @@ const tsxBin = path.join(repoRoot, "node_modules", ".bin", "tsx");
 const nodeSuites = [
   "db-data-billing.node.ts",
   "db-migration.node.ts",
+  "discount-codes.node.ts",
   "data-management.node.ts",
   "observability.node.ts",
   "permissions.node.ts",

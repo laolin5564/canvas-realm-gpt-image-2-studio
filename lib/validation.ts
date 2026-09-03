@@ -1,6 +1,14 @@
 import { z } from "zod";
+import {
+  discountCodeMaxLength,
+  discountCodeMinLength,
+  normalizeDiscountCode,
+  validateDiscountValue,
+} from "./discount";
 import { imageQualityOptions, sizeOptions } from "./image-options";
 import {
+  discountCodeStatuses,
+  discountCodeTypes,
   generationModes,
   imageConcurrencyLimits,
   imageProviders,
@@ -297,3 +305,62 @@ export const createAdminUserSchema = z.object({
   groupId: nullableString,
   monthlyQuota: z.coerce.number().int().min(0).max(100000),
 });
+
+const nullableDateTimeString = z
+  .union([z.string(), z.null(), z.undefined()])
+  .transform((value) => (value && value.trim() !== "" ? value.trim() : null))
+  .refine((value) => value === null || !Number.isNaN(Date.parse(value)), "时间格式不正确");
+
+/** 折扣码统一大写、4-32 位 A-Z0-9。 */
+export const discountCodeSchema = z
+  .string({ required_error: "请输入折扣码" })
+  .transform((value) => normalizeDiscountCode(value))
+  .refine(
+    (value) => new RegExp(`^[A-Z0-9]{${discountCodeMinLength},${discountCodeMaxLength}}$`).test(value),
+    `折扣码只能是 ${discountCodeMinLength}-${discountCodeMaxLength} 位大写字母或数字`,
+  );
+
+export const previewDiscountSchema = z.object({
+  discountCode: discountCodeSchema,
+  unitCount: z.coerce.number().int().min(1, "购买份数至少 1 份").max(10000, "购买份数过多"),
+});
+
+const discountCodeBaseSchema = z.object({
+  code: z.union([discountCodeSchema, z.null()]).optional(),
+  name: nullableString,
+  type: z.enum(discountCodeTypes),
+  value: z.coerce.number().int().min(1, "折扣数值至少为 1"),
+  minUnits: z.coerce.number().int().min(1).max(10000).default(1),
+  maxUses: z.union([z.coerce.number().int().min(1).max(1000000), z.null()]).default(null),
+  perUserLimit: z.coerce.number().int().min(1).max(10000).default(1),
+  startsAt: nullableDateTimeString,
+  expiresAt: nullableDateTimeString,
+  status: z.enum(discountCodeStatuses).default("active"),
+});
+
+function refineDiscountCodeInput(
+  value: {
+    type?: (typeof discountCodeTypes)[number];
+    value?: number;
+    startsAt?: string | null;
+    expiresAt?: string | null;
+  },
+  ctx: z.RefinementCtx,
+): void {
+  if (value.type !== undefined && value.value !== undefined) {
+    const error = validateDiscountValue(value.type, value.value);
+    if (error) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: error, path: ["value"] });
+    }
+  }
+  if (value.startsAt && value.expiresAt && Date.parse(value.expiresAt) <= Date.parse(value.startsAt)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "结束时间必须晚于开始时间", path: ["expiresAt"] });
+  }
+}
+
+/** 新建折扣码：type / value 必填。 */
+export const upsertDiscountCodeSchema = discountCodeBaseSchema.superRefine(refineDiscountCodeInput);
+
+/** 更新折扣码：所有字段可选，缺省表示不改；type 与 value 只有同时出现才在这里校验，
+ * 单独改一个时由 lib/db 的 updateDiscountCode 合并旧值后兜底。 */
+export const updateDiscountCodeSchema = discountCodeBaseSchema.partial().superRefine(refineDiscountCodeInput);

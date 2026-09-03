@@ -9,12 +9,16 @@ interface LoginAttemptState {
 
 const loginAttempts = new Map<string, LoginAttemptState>();
 const activationCodeAttempts = new Map<string, LoginAttemptState>();
+const discountCodeAttempts = new Map<string, LoginAttemptState>();
 const windowMs = 15 * 60 * 1000;
 const blockMs = 15 * 60 * 1000;
 const maxFailures = 10;
 const activationCodeWindowMs = 10 * 60 * 1000;
 const activationCodeBlockMs = 10 * 60 * 1000;
 const activationCodeMaxFailures = 5;
+const discountCodeWindowMs = 10 * 60 * 1000;
+const discountCodeBlockMs = 10 * 60 * 1000;
+const discountCodeMaxFailures = 20;
 
 function now(): number {
   return Date.now();
@@ -23,6 +27,7 @@ function now(): number {
 function cleanupExpiredAttempts(currentTime = now()): void {
   cleanupAttemptStore(loginAttempts, windowMs, currentTime);
   cleanupAttemptStore(activationCodeAttempts, activationCodeWindowMs, currentTime);
+  cleanupAttemptStore(discountCodeAttempts, discountCodeWindowMs, currentTime);
 }
 
 function cleanupAttemptStore(store: Map<string, LoginAttemptState>, attemptWindowMs: number, currentTime = now()): void {
@@ -83,6 +88,27 @@ export function recordActivationCodeExchangeFailure(key: string): void {
 
 export function clearActivationCodeExchangeFailures(key: string): void {
   activationCodeAttempts.delete(key);
+}
+
+// 折扣码：每用户每 IP 10 分钟内 20 次失败就锁 10 分钟，防止拿接口枚举折扣码。
+export function discountCodeRateLimitKey(request: NextRequest, userId: string): string {
+  return `${clientIpFromRequest(request)}:${userId}`;
+}
+
+export function assertDiscountCodeAttemptAllowed(key: string): void {
+  cleanupExpiredAttempts();
+  const state = discountCodeAttempts.get(key);
+  if (state && state.blockedUntil > now()) {
+    throw new AuthError("折扣码尝试次数过多，请稍后再试", 429);
+  }
+}
+
+export function recordDiscountCodeFailure(key: string): void {
+  recordAttemptFailure(discountCodeAttempts, key, discountCodeWindowMs, discountCodeBlockMs, discountCodeMaxFailures);
+}
+
+export function clearDiscountCodeFailures(key: string): void {
+  discountCodeAttempts.delete(key);
 }
 
 function recordAttemptFailure(
