@@ -10,11 +10,3 @@ export function normalizeHttpHostHeader(value: string | undefined): string | und
   }
   return host;
 }
-
-export function withOptionalHostHeader(
-  headers: Record<string, string>,
-  hostHeader: string | undefined,
-): Record<string, string> {
-  const host = normalizeHttpHostHeader(hostHeader);
-  return host ? { ...headers, Host: host } : headers;
-}

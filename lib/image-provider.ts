@@ -24,7 +24,7 @@ import {
   shouldRefreshOpenAIToken,
   tokenExpiresAt,
 } from "./openai-oauth";
-import { withOptionalHostHeader } from "./http-host";
+import { fetchWithOriginHost } from "./origin-fetch";
 import { extractOpenAIOAuthImagesFromResponsesStream } from "./openai-image-bridge";
 import { formatModelError, formatModelErrorDetail } from "./model-error";
 import { fetchWithOptionalProxy } from "./proxy";
@@ -343,16 +343,16 @@ async function requestTextToImage(
 
   return withUpstreamImageSlot(() =>
     withAttemptTelemetry(task, settings, async () => {
-      const response = await fetch(`${settings.baseUrl}/images/generations`, {
+      const response = await fetchWithOriginHost(`${settings.baseUrl}/images/generations`, {
         method: "POST",
-        headers: withOptionalHostHeader({
+        headers: {
           Authorization: `Bearer ${settings.bearerToken}`,
           "Content-Type": "application/json",
           "User-Agent": IMAGE_USER_AGENT,
-        }, settings.hostHeader),
+        },
         body: JSON.stringify(body),
         signal: requestSignal(signal),
-      });
+      }, settings.hostHeader);
 
       return readModelResponse(response, "image generation failed", settings);
     }),
@@ -397,15 +397,15 @@ async function requestImageEdit(
 
   return withUpstreamImageSlot(() =>
     withAttemptTelemetry(task, settings, async () => {
-      const response = await fetch(`${settings.baseUrl}/images/edits`, {
+      const response = await fetchWithOriginHost(`${settings.baseUrl}/images/edits`, {
         method: "POST",
-        headers: withOptionalHostHeader({
+        headers: {
           Authorization: `Bearer ${settings.bearerToken}`,
           "User-Agent": IMAGE_USER_AGENT,
-        }, settings.hostHeader),
+        },
         body: form,
         signal: requestSignal(signal),
-      });
+      }, settings.hostHeader);
 
       return readModelResponse(response, "image edit failed", settings);
     }),

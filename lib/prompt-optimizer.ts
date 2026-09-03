@@ -1,5 +1,5 @@
 import type { ImageProvider, OpenAIOAuthAccountRow } from "./types";
-import { withOptionalHostHeader } from "./http-host";
+import { fetchWithOriginHost, type OriginFetchInit } from "./origin-fetch";
 
 export interface PromptOptimizationInput {
   prompt: string;
@@ -272,10 +272,10 @@ async function requestResponsesApi(
 ): Promise<unknown> {
   const response = await fetchOptimizer(`${baseUrl}/responses`, {
     method: "POST",
-    headers: withOptionalHostHeader({
+    headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
-    }, hostHeader),
+    },
     body: JSON.stringify({
       model,
       input: [
@@ -283,7 +283,7 @@ async function requestResponsesApi(
         { role: "user", content: [{ type: "input_text", text: userPrompt }] },
       ],
     }),
-  });
+  }, hostHeader);
   return readOptimizerResponse(response, "Responses");
 }
 
@@ -297,10 +297,10 @@ async function requestChatCompletionsApi(
 ): Promise<unknown> {
   const response = await fetchOptimizer(`${baseUrl}/chat/completions`, {
     method: "POST",
-    headers: withOptionalHostHeader({
+    headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
-    }, hostHeader),
+    },
     body: JSON.stringify({
       model,
       messages: [
@@ -309,14 +309,19 @@ async function requestChatCompletionsApi(
       ],
       temperature: 0.25,
     }),
-  });
+  }, hostHeader);
   return readOptimizerResponse(response, "Chat Completions");
 }
 
 // 提示词优化是前台同步等待的调用，超过一分钟直接判失败，别让页面一直转圈。
-async function fetchOptimizer(url: string, init: RequestInit): Promise<Response> {
+// 直连源站 IP 时 Host 头要真正发出去，所以走 fetchWithOriginHost 而不是裸 fetch。
+async function fetchOptimizer(url: string, init: OriginFetchInit, hostHeader?: string): Promise<Response> {
   try {
-    return await fetch(url, { ...init, signal: AbortSignal.timeout(promptOptimizerTimeoutMs) });
+    return await fetchWithOriginHost(
+      url,
+      { ...init, signal: AbortSignal.timeout(promptOptimizerTimeoutMs) },
+      hostHeader,
+    );
   } catch (error) {
     throw toPromptOptimizerNetworkError(error);
   }

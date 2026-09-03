@@ -1,29 +1,16 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { normalizeHttpHostHeader, withOptionalHostHeader } from "../lib/http-host";
+import { normalizeHttpHostHeader } from "../lib/http-host";
 
 describe("HTTP origin host routing", () => {
-  test("adds the configured Host header without changing the request URL", () => {
-    assert.deepEqual(
-      withOptionalHostHeader(
-        {
-          Authorization: "Bearer test-token",
-          "User-Agent": "test-agent",
-        },
-        " s2a.laolin.ai ",
-      ),
-      {
-      Authorization: "Bearer test-token",
-      "User-Agent": "test-agent",
-      Host: "s2a.laolin.ai",
-      },
-    );
+  test("trims the configured Host value", () => {
+    assert.equal(normalizeHttpHostHeader(" s2a.laolin.ai "), "s2a.laolin.ai");
+    assert.equal(normalizeHttpHostHeader("s2a.laolin.ai:8443"), "s2a.laolin.ai:8443");
   });
 
-  test("omits an empty Host override", () => {
-    assert.deepEqual(withOptionalHostHeader({ Accept: "application/json" }, "  "), {
-      Accept: "application/json",
-    });
+  test("treats an empty Host override as absent", () => {
+    assert.equal(normalizeHttpHostHeader("  "), undefined);
+    assert.equal(normalizeHttpHostHeader(undefined), undefined);
   });
 
   test("rejects unsafe or malformed Host values", () => {
