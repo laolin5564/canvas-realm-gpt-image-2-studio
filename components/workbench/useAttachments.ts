@@ -1,12 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { maxReferenceImageCount } from "@/lib/validation";
+import { maxReferenceImageCount, maxSourceImageUploadBytes } from "@/lib/validation";
 import {
   appendAttachments,
   applyUploadedAttachments,
   clearAttachments,
   isRevokableUrl,
+  partitionIncomingFiles,
   removeAttachment,
   setAttachmentRole,
   type AttachmentMutation,
@@ -21,6 +22,8 @@ export interface AddFilesResult {
   skipped: number;
   /** 类型不支持被过滤掉的数量。 */
   invalid: number;
+  /** 超过 maxSourceImageUploadBytes 被跳过的数量。 */
+  oversized: number;
 }
 
 export interface AttachmentsController {
@@ -65,9 +68,12 @@ export function useAttachments(prefix: string, limit: number = maxReferenceImage
   const addFiles = useCallback(
     (files: FileList | File[] | null): AddFilesResult => {
       const all = files ? Array.from(files) : [];
-      const valid = all.filter(isSupportedImageFile);
+      const { valid, invalid, oversized } = partitionIncomingFiles(all, {
+        isSupported: isSupportedImageFile,
+        maxBytes: maxSourceImageUploadBytes,
+      });
       if (valid.length === 0) {
-        return { added: 0, skipped: 0, invalid: all.length };
+        return { added: 0, skipped: 0, invalid, oversized };
       }
       const incoming = valid.map((file) => ({
         id: makeLocalId(prefix),
@@ -80,7 +86,7 @@ export function useAttachments(prefix: string, limit: number = maxReferenceImage
       listRef.current = result.next;
       setAttachments(result.next);
       result.revoked.forEach(revoke);
-      return { added: incoming.length - result.skipped, skipped: result.skipped, invalid: all.length - valid.length };
+      return { added: incoming.length - result.skipped, skipped: result.skipped, invalid, oversized };
     },
     [limit, prefix],
   );

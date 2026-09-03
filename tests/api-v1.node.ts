@@ -497,3 +497,149 @@ test("acquireApiKeyToken：同一把密钥每分钟只放行 60 次", async () =
   assert.equal(rateLimit.acquireApiKeyToken(keyId, base + 1_000).allowed, true);
   rateLimit.resetApiKeyRateLimit();
 });
+
+/* ---------------------------------------------------------------------------
+ * 参考图上传入口：saveApiSourceImage(s) → 30MB 上限 → 魔数 → 归一化 → 落盘 webp/原格式 → 写真实宽高。
+ * ------------------------------------------------------------------------- */
+
+async function listStoredSourceFiles(): Promise<string[]> {
+  const { readdirSync, existsSync } = await import("node:fs");
+  const root = path.join(process.env.IMAGE_STORAGE_DIR as string, "source");
+  if (!existsSync(root)) {
+    return [];
+  }
+  return readdirSync(root, { recursive: true, encoding: "utf8" })
+    .filter((entry) => /\.(png|jpg|jpeg|webp)$/.test(entry))
+    .sort();
+}
+
+test("saveApiSourceImage：3000×1500 PNG 落盘为 .webp，入库宽高 2048×1024", async () => {
+  const { default: sharp } = await import("sharp");
+  const { db } = await load();
+  const server = await import("../lib/api-v1-server");
+  const user = await createTestUser("上传大图");
+  const bytes = new Uint8Array(
+    await sharp({ create: { width: 3000, height: 1500, channels: 3, background: "#3366cc" } }).png().toBuffer(),
+  );
+
+  const id = await server.saveApiSourceImage({ userId: user.id, bytes, mimeType: "image/png", originalName: "wide.png" });
+  const row = db.getSourceImage(id);
+  assert.ok(row);
+  assert.equal(row.user_id, user.id);
+  assert.equal(row.width, 2048);
+  assert.equal(row.height, 1024);
+  assert.equal(row.mime_type, "image/webp");
+  assert.equal(row.original_name, "wide.png");
+  assert.match(row.file_path, /^source\/\d{4}\/\d{2}\/\d{2}\/src_[^/]+\.webp$/);
+
+  const { readFileSync } = await import("node:fs");
+  const stored = readFileSync(path.resolve(process.env.IMAGE_STORAGE_DIR as string, row.file_path));
+  const meta = await sharp(stored).metadata();
+  assert.equal(meta.format, "webp");
+  assert.equal(meta.width, 2048);
+  assert.equal(meta.height, 1024);
+});
+
+test("saveApiSourceImage：640×480 PNG 直通，扩展名仍是 .png 且写真实宽高", async () => {
+  const { default: sharp } = await import("sharp");
+  const { db } = await load();
+  const server = await import("../lib/api-v1-server");
+  const user = await createTestUser("上传小图");
+  const bytes = new Uint8Array(
+    await sharp({ create: { width: 640, height: 480, channels: 3, background: "#cc6633" } }).png().toBuffer(),
+  );
+
+  const id = await server.saveApiSourceImage({ userId: user.id, bytes, mimeType: null, originalName: null });
+  const row = db.getSourceImage(id);
+  assert.ok(row);
+  assert.equal(row.width, 640);
+  assert.equal(row.height, 480);
+  assert.equal(row.mime_type, "image/png");
+  assert.match(row.file_path, /\.png$/);
+  const { readFileSync } = await import("node:fs");
+  const stored = readFileSync(path.resolve(process.env.IMAGE_STORAGE_DIR as string, row.file_path));
+  assert.equal(Buffer.from(bytes).equals(stored), true);
+});
+
+test("saveApiSourceImage：超过 30MB → validation_error 400，文案含 30 MB", async () => {
+  const server = await import("../lib/api-v1-server");
+  const user = await createTestUser("上传超限");
+  const bytes = new Uint8Array(30 * 1024 * 1024 + 1);
+  bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  await assert.rejects(
+    () => server.saveApiSourceImage({ userId: user.id, bytes, mimeType: "image/png", originalName: "huge.png" }),
+    (error: unknown) =>
+      errorCode(error) === "validation_error" &&
+      errorStatus(error) === 400 &&
+      (error as Error).message.includes("30 MB"),
+  );
+});
+
+test("saveApiSourceImage：PNG 魔数 + 垃圾字节 → validation_error「图片文件损坏或无法解析」", async () => {
+  const server = await import("../lib/api-v1-server");
+  const user = await createTestUser("上传坏图");
+  const junk = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  await assert.rejects(
+    () => server.saveApiSourceImage({ userId: user.id, bytes: junk, mimeType: "image/png", originalName: null }),
+    (error: unknown) =>
+      errorCode(error) === "validation_error" &&
+      errorStatus(error) === 400 &&
+      (error as Error).message === "图片文件损坏或无法解析",
+  );
+});
+
+test("saveApiSourceImages：多图两阶段——第二张校验失败时第一张也不落盘、不建记录", async () => {
+  const { default: sharp } = await import("sharp");
+  const server = await import("../lib/api-v1-server");
+  const user = await createTestUser("上传多图");
+  const good = new Uint8Array(
+    await sharp({ create: { width: 320, height: 200, channels: 3, background: "#336633" } }).png().toBuffer(),
+  );
+  const junk = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 9, 9, 9, 9, 9, 9, 9, 9]);
+
+  const before = await listStoredSourceFiles();
+  await assert.rejects(
+    () =>
+      server.saveApiSourceImages(user.id, [
+        { bytes: good, mimeType: "image/png", originalName: "a.png" },
+        { bytes: junk, mimeType: "image/png", originalName: "b.png" },
+      ]),
+    (error: unknown) => errorCode(error) === "validation_error",
+  );
+  assert.deepEqual(await listStoredSourceFiles(), before);
+
+  const ids = await server.saveApiSourceImages(user.id, [
+    { bytes: good, mimeType: "image/png", originalName: "a.png" },
+    { bytes: good, mimeType: "image/png", originalName: "b.png" },
+  ]);
+  assert.equal(ids.length, 2);
+  assert.equal((await listStoredSourceFiles()).length, before.length + 2);
+});
+
+test("storeSourceImages：落盘中途失败回滚已写文件与记录", async () => {
+  const { default: sharp } = await import("sharp");
+  const { db } = await load();
+  const store = await import("../lib/source-image-store");
+  const upload = await import("../lib/source-image-upload");
+  const user = await createTestUser("上传回滚");
+  const bytes = new Uint8Array(
+    await sharp({ create: { width: 200, height: 100, channels: 3, background: "#999" } }).png().toBuffer(),
+  );
+  const first = await upload.prepareSourceImage({ bytes, mimeType: "image/png", originalName: "first.png" });
+  // 第二张伪造成 storage 不认的类型，saveSourceImageFile 会在写盘前抛错。
+  const broken = { ...first, mimeType: "image/gif" as unknown as typeof first.mimeType, originalName: "broken.gif" };
+
+  const countRows = () =>
+    Number((db.getDb().prepare("SELECT COUNT(*) AS n FROM source_images WHERE user_id = ?").get(user.id) as { n: number }).n);
+
+  const before = await listStoredSourceFiles();
+  assert.equal(countRows(), 0);
+  await assert.rejects(() => store.storeSourceImages(user.id, [first, broken]));
+  assert.deepEqual(await listStoredSourceFiles(), before);
+  assert.equal(countRows(), 0);
+
+  const [row] = await store.storeSourceImages(user.id, [first]);
+  assert.equal(countRows(), 1);
+  assert.equal(row.width, 200);
+  assert.equal(row.height, 100);
+});

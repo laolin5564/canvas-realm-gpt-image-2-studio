@@ -1,6 +1,7 @@
 import path from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import { normalizeHttpHostHeader } from "./http-host";
+import { maxSourceImageUploadBytes } from "./validation";
 import { defaultUpdateCheckUrl, defaultUpdateRepo } from "./version";
 
 loadLocalEnvFiles();
@@ -82,6 +83,11 @@ export const appConfig = {
   originFetchExpectContinue: readBooleanEnv("ORIGIN_FETCH_EXPECT_CONTINUE"),
   sub2apiApiKey: process.env.SUB2API_API_KEY || "",
   imageEditInputFidelity: process.env.IMAGE_EDIT_INPUT_FIDELITY ?? "high",
+  // 参考图上传入口：原始文件硬上限固定 30MB（lib/validation.ts 的常量是唯一真源，前端预检同一份，不走环境变量）；
+  // 落盘前的最长边与体积软目标可配。
+  sourceImageMaxUploadBytes: maxSourceImageUploadBytes,
+  sourceImageMaxDimension: readNumberEnv("SOURCE_IMAGE_MAX_DIMENSION", 2048),
+  sourceImageTargetBytes: readNumberEnv("SOURCE_IMAGE_TARGET_BYTES", 3_000_000),
   imagePublicBaseUrl: (process.env.IMAGE_PUBLIC_BASE_URL || "").trim().replace(/\/+$/, ""),
   sessionCookieDomain: (process.env.SESSION_COOKIE_DOMAIN || "").trim(),
   imageModel: process.env.IMAGE_MODEL || "gpt-image-2",

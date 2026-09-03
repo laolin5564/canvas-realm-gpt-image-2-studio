@@ -13,6 +13,9 @@ services:
       IMAGE_STORAGE_DIR: "/app/data/images"
       DATABASE_URL: "file:/app/data/app.db"
       IMAGE_REQUEST_TIMEOUT_MS: "300000"
+      # 参考图原始上限固定 30MB（代码常量，不可配置）；前置网关的 client_max_body_size 需 ≥ 32MB。
+      SOURCE_IMAGE_MAX_DIMENSION: "${SOURCE_IMAGE_MAX_DIMENSION:-2048}"
+      SOURCE_IMAGE_TARGET_BYTES: "${SOURCE_IMAGE_TARGET_BYTES:-3000000}"
       WORKER_POLL_INTERVAL_MS: "3000"
       COST_PER_IMAGE: "${COST_PER_IMAGE:-0.04}"
       APP_BASE_URL: "${APP_BASE_URL:-}"

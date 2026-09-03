@@ -27,6 +27,9 @@ const nullableString = z
 // 参考图上限：工作台与会话续图两条链路必须一致。
 export const maxReferenceImageCount = 4;
 
+/** 单张参考图原始文件上限（前端预检与服务端上传入口共用）；落盘前会再归一化到约 3MB。 */
+export const maxSourceImageUploadBytes = 30 * 1024 * 1024;
+
 const referenceImageIdsSchema = z
   .array(z.string().trim().min(1, "参考图 ID 不能为空"))
   .max(maxReferenceImageCount, `参考图最多 ${maxReferenceImageCount} 张`)

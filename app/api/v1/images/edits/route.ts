@@ -6,11 +6,12 @@ import {
   authenticateApiRequest,
   decodeBase64Image,
   finalizeApiGeneration,
-  saveApiSourceImage,
+  saveApiSourceImages,
 } from "@/lib/api-v1-server";
 import { createGenerationTask, getTemplate } from "@/lib/db";
 import { assertTemplateReadAccess } from "@/lib/permissions";
-import { apiV1EditSchema, maxReferenceImageCount } from "@/lib/validation";
+import { contentLengthExceeds, sourceImageTooLargeMessage } from "@/lib/source-image-upload";
+import { apiV1EditSchema, maxReferenceImageCount, maxSourceImageUploadBytes } from "@/lib/validation";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -60,6 +61,13 @@ export const POST = withApiHandler(async (request: NextRequest) => {
   const contentType = request.headers.get("content-type") ?? "";
   const isMultipart = contentType.toLowerCase().includes("multipart/form-data");
 
+  // 读 body 之前先按 Content-Length 拦：formData() / json() 会把整个请求缓冲进内存。
+  // 上限 = 最多 4 张 × 单张 30MB（JSON 里 base64 再放大 4/3）。
+  const maxBodyBytes = maxReferenceImageCount * maxSourceImageUploadBytes * (isMultipart ? 1 : 4 / 3);
+  if (contentLengthExceeds(request.headers.get("content-length"), maxBodyBytes)) {
+    throw apiError("validation_error", `请求体过大：${sourceImageTooLargeMessage}`);
+  }
+
   const { raw, images } = isMultipart
     ? await readMultipart(request)
     : { raw: (await readJsonBody(request)) as Record<string, unknown>, images: [] as PendingImage[] };
@@ -90,18 +98,8 @@ export const POST = withApiHandler(async (request: NextRequest) => {
   assertApiActiveTaskLimit(user.id);
   assertApiQuota(user, body.n);
 
-  // 先过完限流与额度再落盘，避免被拒的请求还占磁盘。
-  const imageIds: string[] = [];
-  for (const image of pending) {
-    imageIds.push(
-      await saveApiSourceImage({
-        userId: user.id,
-        bytes: image.bytes,
-        mimeType: image.mimeType,
-        originalName: image.originalName,
-      }),
-    );
-  }
+  // 先过完限流与额度再落盘，避免被拒的请求还占磁盘；多张图先全部校验 + 归一化再统一落盘。
+  const imageIds = await saveApiSourceImages(user.id, pending);
 
   // 第一张为主图，其余作为额外参考图，与站内工作台的语义保持一致。
   const referenceImageIds = imageIds.slice(1);

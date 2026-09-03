@@ -259,6 +259,7 @@ export const apiEndpoints: ApiEndpoint[] = [
       "表单字段：image（可重复 1-4 次）、prompt、negative_prompt、size、quality、n、wait、response_format。",
       "也可以直接发 JSON，用 image_base64 数组代替文件，元素支持 data URL 或纯 base64。",
       "参考图只用于本次生成，不会写进模板库。",
+      "单张参考图原始文件最大 30MB（像素总量最多 6400 万）；服务端会自动缩放到最长边 2048px 并压缩到约 3MB 以内，无需客户端预处理。需要重编码时会按 EXIF 转正并剥离 EXIF（保留 ICC）；本来就符合要求的图原样保留，EXIF 也不会被去掉。",
     ],
     requestExample: `{
   "image_base64": [

@@ -42,6 +42,8 @@ import {
 import { AssetRecordType } from "@tldraw/tlschema";
 import clsx from "clsx";
 import type { ImageSizeOption } from "@/lib/image-options";
+import { maxSourceImageUploadBytes } from "@/lib/validation";
+import { oversizedFilesMessage } from "@/components/workbench/attachments";
 import { imageSizeLabels, ratioForOption, sizeFromDimensions, sizeOptions } from "@/lib/image-options";
 import type { PublicCanvasProject, PublicImage, PublicTask } from "@/lib/types";
 import { apiJson, copyTextToClipboard, formatDateTime, modeLabels, progressStageLabels, statusLabels } from "@/components/client-api";
@@ -443,13 +445,20 @@ export function CanvasClient() {
       setError("画布还没有准备好");
       return;
     }
-    const imageFiles = files.filter((file) => file.type.startsWith("image/"));
-    if (imageFiles.length === 0) {
+    const allImageFiles = files.filter((file) => file.type.startsWith("image/"));
+    if (allImageFiles.length === 0) {
       setError("请上传 PNG、JPG 或 WEBP 图片");
       return;
     }
+    // 与工作台一致：超过原始上限的文件不发上传请求，直接提示。
+    const imageFiles = allImageFiles.filter((file) => file.size <= maxSourceImageUploadBytes);
+    const oversized = allImageFiles.length - imageFiles.length;
+    if (imageFiles.length === 0) {
+      setError(oversizedFilesMessage(oversized));
+      return;
+    }
     setBusy(true);
-    setError("");
+    setError(oversized > 0 ? oversizedFilesMessage(oversized) : "");
     setMessage("");
     try {
       for (const file of imageFiles.slice(0, 8)) {
@@ -1296,6 +1305,10 @@ function WorkflowReferenceList({
 }
 
 async function uploadCanvasImageFile(file: File): Promise<SourceImageUploadResponse> {
+  // tldraw 自带的粘贴 / 拖放也会走这里（canvasAssetStore.upload），同样先拦超限文件。
+  if (file.size > maxSourceImageUploadBytes) {
+    throw new Error(oversizedFilesMessage(1));
+  }
   const formData = new FormData();
   formData.append("image", file);
   return apiJson<SourceImageUploadResponse>("/api/source-images", {

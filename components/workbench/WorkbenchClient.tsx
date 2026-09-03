@@ -7,6 +7,7 @@ import { imageSizeLabels, normalizeImageQualityOption, normalizeImageSizeOption 
 import type { ImageQualityOption, ImageSizeOption } from "@/lib/image-options";
 import { defaultNegativePromptFor } from "@/lib/prompt-defaults";
 import { maxReferenceImageCount } from "@/lib/validation";
+import { oversizedFilesMessage } from "@/components/workbench/attachments";
 import { defaultValuesForTemplate, renderTemplatePrompt } from "@/lib/template-prompt";
 import type { TemplateVariableValues } from "@/lib/template-prompt";
 import type {
@@ -104,9 +105,12 @@ export function WorkbenchClient() {
   const addSourceFiles = useCallback(
     (files: FileList | File[] | null) => {
       const result = sourceAttachments.addFiles(files);
-      if (result.added === 0 && result.invalid > 0) {
+      if (result.oversized > 0) {
+        pushToast(oversizedFilesMessage(result.oversized), "error");
+      }
+      // 超限与类型不支持各自独立提示：一次拖入「1 张 30MB+ 的 PNG + 1 个 PDF」两条都要说清楚。
+      if (result.invalid > 0 && result.added === 0) {
         pushToast("仅支持 PNG、JPG 或 WEBP 图片", "error");
-        return;
       }
       if (result.skipped > 0) {
         pushToast(`最多 ${maxReferenceImageCount} 张参考图，已忽略 ${result.skipped} 张。`, "error");
@@ -118,9 +122,12 @@ export function WorkbenchClient() {
   const addChatFiles = useCallback(
     (files: FileList | File[] | null) => {
       const result = chatAttachments.addFiles(files);
-      if (result.added === 0 && result.invalid > 0) {
+      if (result.oversized > 0) {
+        pushToast(oversizedFilesMessage(result.oversized), "error");
+      }
+      // 超限与类型不支持各自独立提示：一次拖入「1 张 30MB+ 的 PNG + 1 个 PDF」两条都要说清楚。
+      if (result.invalid > 0 && result.added === 0) {
         pushToast("仅支持 PNG、JPG 或 WEBP 图片", "error");
-        return;
       }
       if (result.skipped > 0) {
         pushToast(`最多 ${maxReferenceImageCount} 张图片，已忽略 ${result.skipped} 张。`, "error");

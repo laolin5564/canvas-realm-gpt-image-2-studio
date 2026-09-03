@@ -12,6 +12,7 @@
 | 图片 Provider | `lib/image-provider.ts`, `lib/sub2api.ts`, `lib/openai-oauth.ts` | 选择图片接口、调用 OpenAI-compatible API、OAuth token 加解密/刷新 | 不直接写任务状态、不绕过队列 |
 | 队列与 Worker | `lib/queue.ts`, `workers/image-worker.ts` | 领取任务、调用 provider、落库结果、失败回写 | 不处理登录态、不暴露管理接口 |
 | 文件存储 | `lib/storage.ts`, `app/api/files/[...path]/route.ts` | 上传/生成图片的本地存储和受控读取 | 不接受任意绝对路径、不暴露 `data/app.db` |
+| 参考图归一化 | `lib/source-image-normalize.ts`, `lib/source-image-upload.ts`, `lib/source-image-store.ts` | 参考图落盘前最长边 ≤ 2048、体积压到约 3MB（webp）、像素总量 ≤ 6400 万，并给出真实宽高；重编码时按 EXIF 转正并剥离 EXIF（保留 ICC），直通时原字节原样保留（含 EXIF）；上传入口共用「30MB 上限 → 魔数 → 归一化（进程内最多 2 张并行）→ 两阶段落盘」 | 不拒绝超出软目标的图、不为剥 EXIF 引入有损重编码 |
 | 系统更新 | `lib/update.ts`, `lib/system-update-runner.ts`, `scripts/update.sh`, `scripts/web-update.sh` | 检查 GitHub Release、执行受限更新脚本、备份数据 | 不接受用户传入 shell 命令 |
 
 ## 请求/任务数据流
