@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
   BarChart3,
+  Code2,
   GalleryHorizontalEnd,
   History,
   Images,
@@ -42,6 +43,7 @@ const navItems = [
   { href: "/canvas", label: "画布", icon: MousePointer2 },
   { href: "/cases", label: "案例中心", icon: Images },
   { href: "/templates", label: "模板管理", icon: LayoutTemplate },
+  { href: "/developer", label: "开发者 API", icon: Code2 },
   { href: "/admin", label: "管理员后台", icon: BarChart3 },
 ];
 

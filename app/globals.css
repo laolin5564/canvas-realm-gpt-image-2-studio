@@ -5065,3 +5065,329 @@ button.nav-link {
     grid-template-columns: 1fr;
   }
 }
+
+/* ── 开发者页（/developer）：密钥管理 + 接口文档 ───────────────────────────── */
+
+.developer-heading-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.developer-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  margin: 0 0 1rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid rgba(161, 98, 7, 0.32);
+  border-radius: 0.8rem;
+  background: rgba(161, 98, 7, 0.09);
+  color: var(--warning);
+}
+
+.developer-alert span {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.developer-alert small {
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.6;
+}
+
+.developer-keys-panel {
+  margin-bottom: 1.2rem;
+}
+
+.developer-stack {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.developer-create-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.65rem;
+  align-items: end;
+}
+
+.developer-create-button {
+  white-space: nowrap;
+}
+
+.developer-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.6;
+}
+
+.developer-empty {
+  display: block;
+  padding: 1.2rem 0;
+  color: var(--muted);
+  text-align: center;
+}
+
+.developer-keys-table {
+  min-width: 52rem;
+}
+
+.developer-inline-code {
+  padding: 0.08rem 0.35rem;
+  border: 1px solid rgba(205, 215, 208, 0.9);
+  border-radius: 0.4rem;
+  background: rgba(238, 242, 239, 0.9);
+  font-family: var(--font-mono, ui-monospace, "SFMono-Regular", Menlo, monospace);
+  font-size: 0.78rem;
+}
+
+.developer-inline-code + .developer-inline-code {
+  margin-left: 0.3rem;
+}
+
+/* 文档区：左侧锚点目录 + 右侧内容 */
+.developer-docs {
+  display: grid;
+  grid-template-columns: minmax(11rem, 13rem) minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.developer-doc-nav {
+  position: sticky;
+  top: 1rem;
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.7rem;
+  border: 1px solid rgba(210, 220, 213, 0.96);
+  border-radius: 0.85rem;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: var(--shadow-tight);
+}
+
+.developer-doc-nav-title {
+  padding: 0.15rem 0.5rem 0.4rem;
+  color: var(--faint);
+  font-size: 0.72rem;
+  font-weight: 780;
+  letter-spacing: 0.08em;
+}
+
+.developer-doc-nav-link {
+  padding: 0.4rem 0.5rem;
+  border-radius: 0.55rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.developer-doc-nav-link:hover {
+  background: rgba(238, 242, 239, 0.92);
+  color: var(--ink);
+}
+
+.developer-doc-body {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.developer-section {
+  scroll-margin-top: 5rem;
+}
+
+.developer-list {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0 0 0.85rem;
+  padding-left: 1.1rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.7;
+}
+
+.developer-list:last-child {
+  margin-bottom: 0;
+}
+
+.developer-endpoint {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.9rem;
+  border: 1px solid rgba(214, 224, 217, 0.92);
+  border-radius: 0.8rem;
+  background: rgba(250, 252, 250, 0.8);
+}
+
+.developer-endpoint h3 {
+  margin: 0;
+  font-size: 0.94rem;
+  font-weight: 780;
+}
+
+.developer-endpoint-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.developer-endpoint-path {
+  font-family: var(--font-mono, ui-monospace, "SFMono-Regular", Menlo, monospace);
+  font-size: 0.84rem;
+  font-weight: 700;
+  word-break: break-all;
+}
+
+.developer-endpoint-summary,
+.developer-endpoint-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.7;
+}
+
+.developer-method {
+  min-width: 3.6rem;
+  padding: 0.12rem 0.45rem;
+  border-radius: 0.4rem;
+  background: rgba(95, 108, 100, 0.14);
+  color: #4d5c54;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-align: center;
+}
+
+.developer-method.get {
+  background: rgba(8, 124, 115, 0.14);
+  color: var(--accent-strong);
+}
+
+.developer-method.post {
+  background: rgba(35, 112, 79, 0.14);
+  color: var(--success);
+}
+
+.developer-method.delete {
+  background: rgba(180, 35, 24, 0.12);
+  color: var(--danger);
+}
+
+.developer-code {
+  overflow: hidden;
+  border: 1px solid rgba(200, 212, 204, 0.92);
+  border-radius: 0.7rem;
+  background: rgba(255, 255, 255, 0.96);
+}
+
+.developer-code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.4rem 0.4rem 0.4rem 0.7rem;
+  border-bottom: 1px solid rgba(218, 226, 220, 0.88);
+  background: rgba(240, 244, 241, 0.86);
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 760;
+}
+
+.developer-code-copy {
+  min-height: 1.85rem;
+  padding: 0 0.55rem;
+  font-size: 0.74rem;
+}
+
+.developer-code pre {
+  overflow-x: auto;
+  margin: 0;
+  padding: 0.75rem 0.85rem;
+  font-family: var(--font-mono, ui-monospace, "SFMono-Regular", Menlo, monospace);
+  font-size: 0.78rem;
+  line-height: 1.65;
+  tab-size: 2;
+}
+
+.developer-limit-list {
+  display: grid;
+  gap: 0.7rem;
+  margin: 0;
+}
+
+.developer-limit-item {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.developer-limit-item dt {
+  font-size: 0.85rem;
+  font-weight: 780;
+}
+
+.developer-limit-item dd {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.7;
+}
+
+.developer-secret-modal {
+  width: min(34rem, 100%);
+}
+
+.developer-secret-warning {
+  display: grid;
+  gap: 0.2rem;
+  margin: 0;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid rgba(180, 35, 24, 0.24);
+  border-radius: 0.7rem;
+  background: rgba(180, 35, 24, 0.08);
+  color: var(--danger);
+}
+
+.developer-secret-warning small {
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.6;
+}
+
+.developer-secret-value {
+  display: block;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid rgba(200, 212, 204, 0.92);
+  border-radius: 0.7rem;
+  background: rgba(240, 244, 241, 0.86);
+  font-family: var(--font-mono, ui-monospace, "SFMono-Regular", Menlo, monospace);
+  font-size: 0.86rem;
+  letter-spacing: 0.02em;
+  word-break: break-all;
+}
+
+@media (max-width: 960px) {
+  .developer-docs {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .developer-doc-nav {
+    position: static;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+  }
+
+  .developer-doc-nav-title {
+    width: 100%;
+  }
+}
+
+@media (max-width: 720px) {
+  .developer-create-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
