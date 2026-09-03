@@ -7,6 +7,7 @@ import { imageSizeLabels, normalizeImageQualityOption, normalizeImageSizeOption 
 import type { ImageQualityOption, ImageSizeOption } from "@/lib/image-options";
 import { defaultNegativePromptFor } from "@/lib/prompt-defaults";
 import { maxReferenceImageCount } from "@/lib/validation";
+import { oversizedFilesMessage } from "@/components/workbench/attachments";
 import { defaultValuesForTemplate, renderTemplatePrompt } from "@/lib/template-prompt";
 import type { TemplateVariableValues } from "@/lib/template-prompt";
 import type {
@@ -104,7 +105,10 @@ export function WorkbenchClient() {
   const addSourceFiles = useCallback(
     (files: FileList | File[] | null) => {
       const result = sourceAttachments.addFiles(files);
-      if (result.added === 0 && result.invalid > 0) {
+      if (result.oversized > 0) {
+        pushToast(oversizedFilesMessage(result.oversized), "error");
+      }
+      if (result.added === 0 && result.invalid > 0 && result.oversized === 0) {
         pushToast("仅支持 PNG、JPG 或 WEBP 图片", "error");
         return;
       }
@@ -118,7 +122,10 @@ export function WorkbenchClient() {
   const addChatFiles = useCallback(
     (files: FileList | File[] | null) => {
       const result = chatAttachments.addFiles(files);
-      if (result.added === 0 && result.invalid > 0) {
+      if (result.oversized > 0) {
+        pushToast(oversizedFilesMessage(result.oversized), "error");
+      }
+      if (result.added === 0 && result.invalid > 0 && result.oversized === 0) {
         pushToast("仅支持 PNG、JPG 或 WEBP 图片", "error");
         return;
       }

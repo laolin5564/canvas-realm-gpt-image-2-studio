@@ -4,12 +4,15 @@ import {
   applyUploadedAttachments,
   attachmentImageIds,
   clearAttachments,
+  oversizedFilesMessage,
+  partitionIncomingFiles,
   primaryAttachmentId,
   referenceAttachmentIds,
   removeAttachment,
   setAttachmentRole,
   type WorkbenchAttachment,
 } from "@/components/workbench/attachments";
+import { maxSourceImageUploadBytes } from "@/lib/validation";
 
 function local(id: string, role: WorkbenchAttachment["role"] = "reference"): WorkbenchAttachment {
   return { id, previewUrl: `blob:${id}`, name: `${id}.png`, role };
@@ -125,5 +128,47 @@ describe("workbench attachments: upload and roles", () => {
 
   test("attachments without an uploaded id contribute no image ids", () => {
     expect(attachmentImageIds([local("a", "primary")]).length).toBe(0);
+  });
+});
+
+describe("workbench attachments: incoming file partition", () => {
+  const isSupported = (file: File): boolean => file.type === "image/png" || file.type === "image/jpeg";
+  const png = (name: string, size: number): File => new File([new Uint8Array(size)], name, { type: "image/png" });
+  const gif = (name: string, size: number): File => new File([new Uint8Array(size)], name, { type: "image/gif" });
+
+  test("splits files into valid / invalid type / oversized", () => {
+    const result = partitionIncomingFiles([png("a.png", 10), gif("b.gif", 10), png("c.png", 200), png("d.png", 101)], {
+      isSupported,
+      maxBytes: 100,
+    });
+    expect(result.valid.map((file) => file.name).join(",")).toBe("a.png");
+    expect(result.invalid).toBe(1);
+    expect(result.oversized).toBe(2);
+  });
+
+  test("a file exactly at the limit is still accepted", () => {
+    const result = partitionIncomingFiles([png("edge.png", 100)], { isSupported, maxBytes: 100 });
+    expect(result.valid.length).toBe(1);
+    expect(result.oversized).toBe(0);
+  });
+
+  test("unsupported type is counted as invalid even when it is also oversized", () => {
+    const result = partitionIncomingFiles([gif("huge.gif", 500)], { isSupported, maxBytes: 100 });
+    expect(result.valid.length).toBe(0);
+    expect(result.invalid).toBe(1);
+    expect(result.oversized).toBe(0);
+  });
+
+  test("empty input yields empty partition", () => {
+    const result = partitionIncomingFiles([], { isSupported, maxBytes: 100 });
+    expect(result.valid.length).toBe(0);
+    expect(result.invalid).toBe(0);
+    expect(result.oversized).toBe(0);
+  });
+
+  test("default limit follows the shared 30 MB constant and the message renders it", () => {
+    expect(maxSourceImageUploadBytes).toBe(30 * 1024 * 1024);
+    expect(oversizedFilesMessage(2)).toBe("有 2 张图片超过 30 MB，已跳过");
+    expect(oversizedFilesMessage(1, 5 * 1024 * 1024)).toBe("有 1 张图片超过 5 MB，已跳过");
   });
 });

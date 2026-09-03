@@ -7,6 +7,8 @@
  * 不再整批 revokeObjectURL。所有函数都不碰 DOM，方便单测。
  */
 
+import { maxSourceImageUploadBytes } from "@/lib/validation";
+
 export type AttachmentRole = "primary" | "reference";
 
 export interface WorkbenchAttachment {
@@ -31,6 +33,45 @@ export interface AttachmentMutation {
 export interface AppendAttachmentsResult extends AttachmentMutation {
   /** 因为超过上限被丢弃的数量。 */
   skipped: number;
+}
+
+export interface IncomingFilePartition {
+  /** 类型支持且体积在上限内，可以进入附件列表的文件。 */
+  valid: File[];
+  /** 类型不支持被过滤掉的数量。 */
+  invalid: number;
+  /** 超过原始文件上限被跳过的数量（服务端同样会拒绝，这里提前拦住省一次上传）。 */
+  oversized: number;
+}
+
+/**
+ * 把用户选中 / 拖入 / 粘贴的文件分成三类：可用、类型不支持、体积超限。
+ * 先按类型过滤再看体积，一个文件只计入一类。
+ */
+export function partitionIncomingFiles(
+  files: readonly File[],
+  options: { isSupported: (file: File) => boolean; maxBytes: number },
+): IncomingFilePartition {
+  const valid: File[] = [];
+  let invalid = 0;
+  let oversized = 0;
+  for (const file of files) {
+    if (!options.isSupported(file)) {
+      invalid += 1;
+      continue;
+    }
+    if (file.size > options.maxBytes) {
+      oversized += 1;
+      continue;
+    }
+    valid.push(file);
+  }
+  return { valid, invalid, oversized };
+}
+
+/** 超过原始文件上限被跳过时的提示文案，工作台 / 会话 / 画布共用。 */
+export function oversizedFilesMessage(count: number, maxBytes: number = maxSourceImageUploadBytes): string {
+  return `有 ${count} 张图片超过 ${Math.round(maxBytes / (1024 * 1024))} MB，已跳过`;
 }
 
 export function isRevokableUrl(url: string | undefined | null): boolean {
