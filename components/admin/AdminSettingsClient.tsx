@@ -6,8 +6,11 @@ import type { PublicAdminSettings, PublicUserGroup } from "@/lib/types";
 import { apiJson } from "@/components/client-api";
 import { AdminShell } from "./AdminShell";
 
+/** 开放 API 开关由后端在 PublicAdminSettings 里补齐，这里先按可选字段读，缺失时按开启处理。 */
+type AdminSettingsWithApi = PublicAdminSettings & { apiEnabled?: boolean };
+
 interface SettingsResponse {
-  settings: PublicAdminSettings;
+  settings: AdminSettingsWithApi;
 }
 
 interface GroupsResponse {
@@ -21,6 +24,7 @@ export function AdminSettingsClient() {
   const [registrationEnabled, setRegistrationEnabled] = useState(true);
   const [registrationDefaultGroupId, setRegistrationDefaultGroupId] = useState("");
   const [imageRetentionDays, setImageRetentionDays] = useState(0);
+  const [apiEnabled, setApiEnabled] = useState(true);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
@@ -41,6 +45,7 @@ export function AdminSettingsClient() {
       setRegistrationEnabled(settings.registrationEnabled);
       setRegistrationDefaultGroupId(settings.registrationDefaultGroupId || groupsPayload.groups[0]?.id || "");
       setImageRetentionDays(settings.imageRetentionDays);
+      setApiEnabled(settings.apiEnabled !== false);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "站点设置加载失败");
     } finally {
@@ -65,6 +70,7 @@ export function AdminSettingsClient() {
           registrationEnabled,
           registrationDefaultGroupId,
           imageRetentionDays,
+          apiEnabled,
         }),
       });
       setMessage("站点设置已保存。");
@@ -80,7 +86,7 @@ export function AdminSettingsClient() {
     <AdminShell
       active="settings"
       title="站点设置"
-      description="管理站点品牌、开放注册、注册默认分组和图片自动清理周期。"
+      description="管理站点品牌、开放注册、开放 API、注册默认分组和图片自动清理周期。"
       actions={
         <>
           <button className="button" type="button" onClick={loadSettings} disabled={loading}>
@@ -114,6 +120,13 @@ export function AdminSettingsClient() {
             <span>
               <strong>开放注册</strong>
               <small>关闭后只能由管理员在账号管理页创建账号。</small>
+            </span>
+          </label>
+          <label className="switch-row admin-setting-switch">
+            <input type="checkbox" checked={apiEnabled} onChange={(event) => setApiEnabled(event.target.checked)} />
+            <span>
+              <strong>开放 API</strong>
+              <small>允许用户在开发者页创建密钥并直接调用 /api/v1 生成图片；关闭后所有开放接口与密钥创建返回 403 api_disabled。</small>
             </span>
           </label>
           <div className="admin-settings-policy-row">
