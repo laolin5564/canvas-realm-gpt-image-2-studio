@@ -10,6 +10,7 @@ import {
 } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { handleRouteError, jsonError } from "@/lib/http";
+import { resolveListScope } from "@/lib/image-scope";
 import { assertConversationAccess, assertImageReferenceAccess, assertQuotaAvailable, assertTemplateReadAccess } from "@/lib/permissions";
 import { createGenerationTaskSchema, listTasksQuerySchema } from "@/lib/validation";
 
@@ -21,13 +22,19 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     const user = requireUser(request);
     const query = listTasksQuerySchema.parse(Object.fromEntries(request.nextUrl.searchParams));
     const isAdmin = user.role === "admin";
-    const rows = listGenerationTasks({
+    // 管理员默认也只看自己的任务，显式带 scope=all 才是全体（可再带 userId 收窄到某个用户）。
+    const scope = resolveListScope({
+      role: user.role,
       userId: user.id,
-      isAdmin,
+      scopeParam: request.nextUrl.searchParams.get("scope"),
+      targetUserId: request.nextUrl.searchParams.get("userId"),
+    });
+    const rows = listGenerationTasks({
+      ...scope,
       statuses: query.status,
       limit: query.limit,
     });
-    // 上游原文只给管理员看：普通用户拿到的仍然只有 errorMessage 那句短文案。
+    // 上游原文只给管理员看：普通用户拿到的仍然只有 errorMessage 那句短文案（与列表范围无关，只看角色）。
     const tasks = rows.map((task) =>
       toPublicTask(task, getTaskImages(task.id), { includeErrorDetail: isAdmin }),
     );

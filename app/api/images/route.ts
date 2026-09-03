@@ -3,6 +3,7 @@ import { deleteGeneratedImagesByIds, getGeneratedImagesByIds, listImages, toPubl
 import { requireUser } from "@/lib/auth";
 import { handleRouteError, jsonError } from "@/lib/http";
 import { buildImagePage, decodeImageCursor } from "@/lib/image-cursor";
+import { resolveListScope } from "@/lib/image-scope";
 import { assertGeneratedImageAccess } from "@/lib/permissions";
 import { deleteStorageFile } from "@/lib/storage";
 import { deleteImagesSchema, listImagesQuerySchema } from "@/lib/validation";
@@ -17,10 +18,15 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     const cursor = decodeImageCursor(request.nextUrl.searchParams.get("cursor"));
     const pageSize = query.pageSize;
     const page = cursor ? cursor.page : query.page;
+    // 管理员默认也只看自己的历史；后台历史页显式带 scope=all（可再带 userId 收窄到某个用户）。
     const scope = {
       ...query,
-      userId: user.id,
-      isAdmin: user.role === "admin",
+      ...resolveListScope({
+        role: user.role,
+        userId: user.id,
+        scopeParam: request.nextUrl.searchParams.get("scope"),
+        targetUserId: request.nextUrl.searchParams.get("userId"),
+      }),
     };
 
     const rows = listImages({ ...scope, page, pageSize }).map(toPublicImage);

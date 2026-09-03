@@ -6,7 +6,7 @@ export default function AdminHistoryPage() {
     <AdminShell
       active="history"
       title="历史与素材"
-      description="管理员视角查看生成图片、来源用户、批量删除和素材使用情况。"
+      description="管理员视角：默认展示全部用户的生成记录，可按用户筛选。"
     >
       <HistoryClient embedded />
     </AdminShell>
