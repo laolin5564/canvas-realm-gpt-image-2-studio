@@ -185,6 +185,9 @@ http://服务器IP:3000
 | `DATABASE_URL` | `file:./data/app.db` | SQLite 数据库路径 |
 | `IMAGE_REQUEST_TIMEOUT_MS` | `300000` | 模型请求超时时间 |
 | `WORKER_POLL_INTERVAL_MS` | `3000` | Worker 轮询间隔 |
+| `SOURCE_IMAGE_MAX_UPLOAD_BYTES` | `31457280` | 参考图原始文件上限（30 MB），超过直接拒绝 |
+| `SOURCE_IMAGE_MAX_DIMENSION` | `2048` | 参考图落盘前的最长边上限（像素），超过按比例缩小 |
+| `SOURCE_IMAGE_TARGET_BYTES` | `3000000` | 参考图落盘体积软目标（约 3 MB），超过重编码为 webp |
 | `APP_BASE_URL` | 空 | 部署域名，用于部分回调和 Cookie 判断 |
 | `SESSION_COOKIE_SECURE` | `false` | HTTPS 部署建议设为 `true` |
 | `LAOLINYUN_USER_API_URL` | `https://www.laolinyun.cn/api/user.php` | 老林云登录注册接口地址 |

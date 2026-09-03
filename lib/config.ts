@@ -1,6 +1,7 @@
 import path from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import { normalizeHttpHostHeader } from "./http-host";
+import { maxSourceImageUploadBytes } from "./validation";
 import { defaultUpdateCheckUrl, defaultUpdateRepo } from "./version";
 
 loadLocalEnvFiles();
@@ -78,6 +79,10 @@ export const appConfig = {
   sub2apiMaxUploadBytes: readNumberEnv("SUB2API_MAX_UPLOAD_BYTES", 15_000_000),
   sub2apiApiKey: process.env.SUB2API_API_KEY || "",
   imageEditInputFidelity: process.env.IMAGE_EDIT_INPUT_FIDELITY ?? "high",
+  // 参考图上传入口：原始文件硬上限、落盘前的最长边与体积软目标。
+  sourceImageMaxUploadBytes: readNumberEnv("SOURCE_IMAGE_MAX_UPLOAD_BYTES", maxSourceImageUploadBytes),
+  sourceImageMaxDimension: readNumberEnv("SOURCE_IMAGE_MAX_DIMENSION", 2048),
+  sourceImageTargetBytes: readNumberEnv("SOURCE_IMAGE_TARGET_BYTES", 3_000_000),
   imagePublicBaseUrl: (process.env.IMAGE_PUBLIC_BASE_URL || "").trim().replace(/\/+$/, ""),
   sessionCookieDomain: (process.env.SESSION_COOKIE_DOMAIN || "").trim(),
   imageModel: process.env.IMAGE_MODEL || "gpt-image-2",

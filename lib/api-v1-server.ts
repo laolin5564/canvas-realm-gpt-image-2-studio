@@ -21,6 +21,7 @@ import {
 import { assertQuotaAvailable } from "./permissions";
 import { assertApiKeyRateLimit } from "./rate-limit";
 import { signedFileUrl, signedUrlExpiry } from "./signed-url";
+import { normalizeSourceImage, type NormalizedSourceImage } from "./source-image-normalize";
 import { assertSupportedImageBytes, readStorageFile, saveSourceImageFile } from "./storage";
 import type { CurrentUser, GeneratedImageRow, GenerationTaskRow } from "./types";
 
@@ -160,7 +161,8 @@ export async function toApiImageData(
   return data;
 }
 
-const maxApiUploadBytes = appConfig.sub2apiMaxUploadBytes;
+/** 单张参考图原始文件上限；落盘前会再归一化（转正 / 最长边 / 体积），所以这里只拦明显离谱的。 */
+const maxApiUploadBytes = appConfig.sourceImageMaxUploadBytes;
 
 /** 从 multipart 文件或 base64 字符串落一张参考图，归属调用方账号。 */
 export async function saveApiSourceImage(input: {
@@ -173,7 +175,7 @@ export async function saveApiSourceImage(input: {
     throw apiError("validation_error", "参考图内容为空");
   }
   if (input.bytes.length > maxApiUploadBytes) {
-    throw apiError("validation_error", `单张参考图不能超过 ${Math.floor(maxApiUploadBytes / 1_000_000)} MB`);
+    throw apiError("validation_error", `单张参考图不能超过 ${Math.round(maxApiUploadBytes / (1024 * 1024))} MB，请压缩后再上传`);
   }
 
   const mimeType = input.mimeType ?? detectImageMime(input.bytes);
@@ -183,20 +185,30 @@ export async function saveApiSourceImage(input: {
     throw apiError("validation_error", error instanceof Error ? error.message : "仅支持 PNG、JPG、WEBP 图片");
   }
 
+  let normalized: NormalizedSourceImage;
+  try {
+    normalized = await normalizeSourceImage(input.bytes, mimeType, {
+      maxDimension: appConfig.sourceImageMaxDimension,
+      targetBytes: appConfig.sourceImageTargetBytes,
+    });
+  } catch (error) {
+    throw apiError("validation_error", error instanceof Error ? error.message : "图片文件损坏或无法解析");
+  }
+
   const sourceId = createId("src");
   const filePath = await saveSourceImageFile({
     sourceId,
     fileName: input.originalName ?? `${sourceId}`,
-    bytes: input.bytes,
-    mimeType,
+    bytes: normalized.bytes,
+    mimeType: normalized.mimeType,
   });
   const source = createSourceImage({
     userId: input.userId,
     filePath,
-    width: 0,
-    height: 0,
+    width: normalized.width,
+    height: normalized.height,
     originalName: input.originalName,
-    mimeType,
+    mimeType: normalized.mimeType,
   });
   return source.id;
 }
