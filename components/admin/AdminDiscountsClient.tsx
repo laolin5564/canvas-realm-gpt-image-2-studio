@@ -541,7 +541,7 @@ function DiscountFormFields({
           placeholder={codePlaceholder}
           onChange={(event) => patch({ code: normalizeDiscountCode(event.target.value) })}
         />
-        <span className="field-hint">4-32 位，仅大写字母和数字。</span>
+        <span className="field-hint">2-32 位，支持中文、字母和数字；小写会自动转大写，留空自动生成。</span>
       </label>
 
       <label className="field">

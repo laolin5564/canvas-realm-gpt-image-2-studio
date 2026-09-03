@@ -3,31 +3,24 @@ import type {
   AiImageOrderDiscount,
   DiscountType,
 } from "@/components/workbench/types";
+import { discountCodeFormatMessage, isValidDiscountCode, normalizeDiscountCode } from "@/lib/discount";
 
-/** 折扣码统一大写、去掉所有空白：输入框每次 onChange 都过这一层。 */
-export function normalizeDiscountCode(value: string): string {
-  return value.replace(/\s+/g, "").toUpperCase();
-}
+/**
+ * 折扣码归一化：直接复用后端那一份（NFKC + 去空白 + ASCII 大写），
+ * 输入框每次 onChange 都过这一层，前后端不再各写一套。
+ */
+export { normalizeDiscountCode };
 
 /**
  * 折扣码输入的前端预校验，返回中文错误文案；null 表示形式上合法。
- * 只挡明显不合法的输入，是否存在 / 是否可用一律以服务端预览结果为准。
+ * 字符与长度规则同样来自 lib/discount，是否存在 / 是否可用一律以服务端预览结果为准。
  */
 export function validateDiscountCodeInput(value: string): string | null {
   const code = normalizeDiscountCode(value);
   if (!code) {
     return "请输入折扣码";
   }
-  if (!/^[A-Z0-9]+$/.test(code)) {
-    return "折扣码只能包含大写字母和数字";
-  }
-  if (code.length < 4) {
-    return "折扣码至少 4 位";
-  }
-  if (code.length > 32) {
-    return "折扣码最多 32 位";
-  }
-  return null;
+  return isValidDiscountCode(code) ? null : discountCodeFormatMessage;
 }
 
 /** 分转元：1000 → "￥10.00"，货币符号跟随购买弹窗现有写法。 */

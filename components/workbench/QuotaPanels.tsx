@@ -97,7 +97,7 @@ export function BuyCreditsModal({
                     className="input"
                     value={discountCode}
                     maxLength={32}
-                    placeholder="请输入折扣码，例如 SUMMER80"
+                    placeholder="输入折扣码，支持中文，例如 双十一"
                     aria-label="折扣码"
                     onChange={(event) => onDiscountCodeChange(event.target.value)}
                     onKeyDown={(event) => {

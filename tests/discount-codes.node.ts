@@ -164,8 +164,12 @@ test("createDiscountCode 显式码：大写归一、重复报 400、非法数值
     (error: Error & { status?: number }) => error.message === "折扣码已存在" && error.status === 400,
   );
   assert.throws(
-    () => db.createDiscountCode({ code: "ABC", type: "percent", value: 80 }),
-    /折扣码只能是 4-32 位大写字母或数字/,
+    () => db.createDiscountCode({ code: "A", type: "percent", value: 80 }),
+    /折扣码为 2-32 位，支持中文、字母和数字/,
+  );
+  assert.throws(
+    () => db.createDiscountCode({ code: "SAVE-20", type: "percent", value: 80 }),
+    /折扣码为 2-32 位，支持中文、字母和数字/,
   );
   assert.throws(() => db.createDiscountCode({ type: "percent", value: 100 }), /折扣百分比只能是 1-99/);
   assert.throws(() => db.createDiscountCode({ type: "amount", value: 0 }), /减免金额至少 1 元/);
@@ -174,6 +178,52 @@ test("createDiscountCode 显式码：大写归一、重复报 400、非法数值
   assert.equal(db.getDiscountCodeByCode("save20")!.id, created.id);
   assert.equal(db.getDiscountCodeByCode("  SAVE20 ")!.id, created.id);
   assert.equal(db.getDiscountCodeByCode("NOPE404"), null);
+});
+
+test("中文折扣码：建码后小写 / 全角 / 带空格变体都能查到，预览照常成立", async () => {
+  const db = await loadDb();
+  const user = await createTestUser();
+
+  // 纯中文码：2-32 位内的中文一律原样存。
+  const festival = db.createDiscountCode({ code: " 双十一 ", type: "bonus", value: 5 });
+  assert.equal(festival.code, "双十一");
+  assert.equal(db.getDiscountCodeByCode("双十一")!.id, festival.id);
+  // 全角空格（\u3000）会被 NFKC + 去空白吃掉。
+  assert.equal(db.getDiscountCodeByCode("\u3000双十一\u3000")!.id, festival.id);
+
+  // 中英数混合码：ASCII 大小写归一，中文不动，全角数字折半角。
+  const backToSchool = db.createDiscountCode({ code: "开学季8折vip", type: "percent", value: 80, minUnits: 2 });
+  assert.equal(backToSchool.code, "开学季8折VIP");
+  assert.equal(db.getDiscountCodeByCode("开学季8折vip")!.id, backToSchool.id);
+  assert.equal(db.getDiscountCodeByCode(" 开学季 8折 VIP ")!.id, backToSchool.id);
+  assert.equal(db.getDiscountCodeByCode("开学季\uff18折\uff56\uff49\uff50")!.id, backToSchool.id);
+
+  // 同一个码换个写法再建一次，UNIQUE 照样拦住。
+  assert.throws(
+    () => db.createDiscountCode({ code: "开学季\uff18折vip", type: "percent", value: 80 }),
+    (error: Error & { status?: number }) => error.message === "折扣码已存在" && error.status === 400,
+  );
+
+  // 预览：用户随手打的全角 + 空格 + 小写变体也能命中。
+  const preview = db.resolveDiscountForPurchase({
+    userId: user.id,
+    code: " 开学季 \uff18折 vip ",
+    unitCount: 10,
+  });
+  assert.equal(preview.ok, true);
+  if (preview.ok) {
+    assert.equal(preview.row.id, backToSchool.id);
+    assert.equal(preview.preview.code, "开学季8折VIP");
+    assert.equal(preview.preview.chargedUnits, 8);
+    assert.equal(preview.preview.creditCount, 100);
+    assert.equal(preview.preview.discountFen, 200);
+  }
+
+  const bonusPreview = db.resolveDiscountForPurchase({ userId: user.id, code: "双十一", unitCount: 1 });
+  assert.equal(bonusPreview.ok, true);
+  if (bonusPreview.ok) {
+    assert.equal(bonusPreview.preview.creditCount, 15);
+  }
 });
 
 test("resolveDiscountForPurchase：算得对，且失败原因是中文、不含内部 id", async () => {

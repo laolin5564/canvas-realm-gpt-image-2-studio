@@ -16,6 +16,7 @@ import {
   validateDiscountCodeInput,
   validateDiscountForm,
 } from "@/components/workbench/discount-ui";
+import { discountCodeFormatMessage as codeFormatMessage } from "@/lib/discount";
 
 function preview(overrides: Partial<AiImageDiscountPreview> = {}): AiImageDiscountPreview {
   return {
@@ -40,24 +41,39 @@ describe("折扣码输入规范化", () => {
     expect(normalizeDiscountCode("")).toBe("");
   });
 
+  test("全角输入与中文码：前端走的就是后端那一份归一化", () => {
+    expect(normalizeDiscountCode("\uff54\uff4a\uff5a\uff4c")).toBe("TJZL");
+    expect(normalizeDiscountCode("开学季\u30008折")).toBe("开学季8折");
+    expect(normalizeDiscountCode("开学季\uff18折")).toBe("开学季8折");
+    expect(normalizeDiscountCode(" 双十一 vip ")).toBe("双十一VIP");
+  });
+
   test("空输入提示补全", () => {
     expect(validateDiscountCodeInput("   ")).toBe("请输入折扣码");
   });
 
-  test("非法字符优先于长度报错", () => {
-    expect(validateDiscountCodeInput("ab-cd")).toBe("折扣码只能包含大写字母和数字");
-    expect(validateDiscountCodeInput("a_")).toBe("折扣码只能包含大写字母和数字");
+  test("非法字符与超限长度共用一句文案", () => {
+    expect(validateDiscountCodeInput("ab-cd")).toBe(codeFormatMessage);
+    expect(validateDiscountCodeInput("a_")).toBe(codeFormatMessage);
+    expect(validateDiscountCodeInput("双十一！")).toBe(codeFormatMessage);
+    expect(validateDiscountCodeInput("A")).toBe(codeFormatMessage);
+    expect(validateDiscountCodeInput("双")).toBe(codeFormatMessage);
+    expect(validateDiscountCodeInput("A".repeat(33))).toBe(codeFormatMessage);
   });
 
-  test("长度边界 4-32", () => {
-    expect(validateDiscountCodeInput("ABC")).toBe("折扣码至少 4 位");
+  test("长度边界 2-32", () => {
+    expect(validateDiscountCodeInput("AB")).toBe(null);
+    expect(validateDiscountCodeInput("双十")).toBe(null);
     expect(validateDiscountCodeInput("ABCD")).toBe(null);
     expect(validateDiscountCodeInput("A".repeat(32))).toBe(null);
-    expect(validateDiscountCodeInput("A".repeat(33))).toBe("折扣码最多 32 位");
+    expect(validateDiscountCodeInput("双".repeat(32))).toBe(null);
   });
 
-  test("小写输入也算合法（会先被规范化）", () => {
+  test("小写与中文输入都算合法（会先被规范化）", () => {
     expect(validateDiscountCodeInput("summer80")).toBe(null);
+    expect(validateDiscountCodeInput("双十一")).toBe(null);
+    expect(validateDiscountCodeInput("开学季 8折")).toBe(null);
+    expect(validateDiscountCodeInput("双十一vip")).toBe(null);
   });
 });
 
@@ -156,7 +172,13 @@ describe("管理后台表单校验", () => {
   });
 
   test("折扣码非法时透传码校验错误", () => {
-    expect(validateDiscountForm({ ...base, code: "AB" })).toBe("折扣码至少 4 位");
+    expect(validateDiscountForm({ ...base, code: "A" })).toBe(codeFormatMessage);
+    expect(validateDiscountForm({ ...base, code: "双十一！" })).toBe(codeFormatMessage);
+  });
+
+  test("中文折扣码在表单里也算合法", () => {
+    expect(validateDiscountForm({ ...base, code: "双十一" })).toBe(null);
+    expect(validateDiscountForm({ ...base, code: "开学季 8折" })).toBe(null);
   });
 
   test("percent 限制 1-99", () => {

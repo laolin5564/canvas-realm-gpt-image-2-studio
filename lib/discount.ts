@@ -13,11 +13,22 @@ export const defaultUnitPriceFen = 100;
 /** 折扣码字符集：全大写字母数字，去掉容易看错的 0/O/1/I。 */
 export const discountCodeAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
-export const discountCodeMinLength = 4;
+export const discountCodeMinLength = 2;
 export const discountCodeMaxLength = 32;
 export const generatedDiscountCodeLength = 8;
 
-const discountCodePattern = new RegExp(`^[A-Z0-9]{${discountCodeMinLength},${discountCodeMaxLength}}$`);
+/**
+ * 折扣码允许的字符：CJK 统一表意文字（\u4e00-\u9fff）与扩展 A（\u3400-\u4dbf）、A-Z、0-9。
+ * 全在 BMP 内，一个字符就是一个码点，正则的 {2,32} 即按码点计长度。
+ */
+const discountCodeCharacterClass = "\\u3400-\\u4dbf\\u4e00-\\u9fffA-Z0-9";
+
+const discountCodePattern = new RegExp(
+  `^[${discountCodeCharacterClass}]{${discountCodeMinLength},${discountCodeMaxLength}}$`,
+);
+
+/** 折扣码格式不合法时的统一文案：前端预校验、zod、数据层三处共用同一句。 */
+export const discountCodeFormatMessage = `折扣码为 ${discountCodeMinLength}-${discountCodeMaxLength} 位，支持中文、字母和数字`;
 
 export interface DiscountCodeDefinition {
   code: string;
@@ -51,15 +62,20 @@ export interface DiscountUsageContext {
   units: number;
 }
 
-/** 折扣码统一大写、去空白；非字符串一律返回空串。 */
+/**
+ * 折扣码归一化；非字符串一律返回空串。
+ * NFKC 先把全角字母数字与全角空格折成半角（「ｔｊｚｌ」→「tjzl」、「\u3000」→「 」），
+ * 再去掉所有空白，最后 toUpperCase 统一 ASCII 大小写（中文不受影响）。
+ * 前端输入框 onChange 与后端存储、查询都走这一个函数，保证同一个码只有一种写法。
+ */
 export function normalizeDiscountCode(value: unknown): string {
   if (typeof value !== "string") {
     return "";
   }
-  return value.trim().toUpperCase();
+  return value.normalize("NFKC").replace(/\s+/gu, "").toUpperCase();
 }
 
-/** 只判断格式：4-32 位 A-Z0-9。 */
+/** 只判断格式：2-32 位中文 / 字母 / 数字；调用前应先 normalizeDiscountCode。 */
 export function isValidDiscountCode(value: string): boolean {
   return discountCodePattern.test(value);
 }
