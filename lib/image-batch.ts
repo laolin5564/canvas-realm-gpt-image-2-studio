@@ -19,6 +19,28 @@ export function isImageTimeoutError(error: unknown): boolean {
   return isModelTimeoutMessage(error instanceof Error ? error.message : String(error ?? ""));
 }
 
+/**
+ * 413（请求体过大）：网关的体积上限是渠道级的，同一份参考图在本渠道原样补发只会再吃一个 413，
+ * 要么调用方先把参考图压小再发，要么直接换一个上限更高的渠道。
+ */
+export function isPayloadTooLargeError(error: unknown): boolean {
+  return imageErrorStatus(error) === 413;
+}
+
+/**
+ * 3xx（源站主机块在做跳转）：渠道的 baseUrl 协议或 Host 主机块配错了，
+ * 同渠道再发只会再吃一个 301，直接换下一个渠道。
+ */
+export function isRedirectError(error: unknown): boolean {
+  const status = imageErrorStatus(error);
+  return status !== null && status >= 300 && status < 400;
+}
+
+/** 默认的「不在本渠道补发、直接切渠道」判定：超时、413 或 3xx。 */
+export function shouldSwitchChannelByDefault(error: unknown): boolean {
+  return isImageTimeoutError(error) || isPayloadTooLargeError(error) || isRedirectError(error);
+}
+
 export interface ImageBatchOptions<TImage> {
   /** 任务需要的总张数。 */
   total: number;
@@ -33,7 +55,7 @@ export interface ImageBatchOptions<TImage> {
   isAbort: (error: unknown) => boolean;
   isRetryable: (error: unknown) => boolean;
   /**
-   * 可重试、但不该在本渠道原地补发的错误（默认：超时）。命中就直接上抛，
+   * 可重试、但不该在本渠道原地补发的错误（默认：超时、413 或 3xx）。命中就直接上抛，
    * 交给 runAcrossChannels 换下一个渠道。
    */
   shouldSwitchChannel?: (error: unknown) => boolean;
@@ -49,7 +71,7 @@ export interface ImageBatchOptions<TImage> {
 export async function runImageGenerationBatches<TImage>(options: ImageBatchOptions<TImage>): Promise<void> {
   const concurrency = Math.max(1, Math.floor(options.concurrency));
   const maxRetries = options.maxRetriesPerBatch ?? 1;
-  const shouldSwitchChannel = options.shouldSwitchChannel ?? isImageTimeoutError;
+  const shouldSwitchChannel = options.shouldSwitchChannel ?? shouldSwitchChannelByDefault;
   const remaining = (): number => options.total - options.delivered();
 
   let retryBudget = maxRetries;
@@ -98,7 +120,8 @@ export async function runImageGenerationBatches<TImage>(options: ImageBatchOptio
       throw fatal;
     }
 
-    // 超时不在本渠道补发：直接上抛，让 failover 去下一个渠道，避免 300s + 300s 的连环等待。
+    // 超时 / 413 / 3xx 不在本渠道补发：直接上抛，让 failover 去下一个渠道
+    //（超时是避免 300s + 300s 的连环等待，413 是同一份请求体再发也一样太大，3xx 是渠道配置问题）。
     const switchNow = failures.find((reason) => shouldSwitchChannel(reason));
     if (switchNow !== undefined) {
       throw switchNow;

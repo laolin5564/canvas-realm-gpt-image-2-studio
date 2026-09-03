@@ -1,5 +1,6 @@
 import type { ImageProvider, OpenAIOAuthAccountRow } from "./types";
-import { withOptionalHostHeader } from "./http-host";
+import { describeNetworkError } from "./model-error-detail";
+import { fetchWithOriginHost, type OriginFetchInit } from "./origin-fetch";
 
 export interface PromptOptimizationInput {
   prompt: string;
@@ -262,20 +263,20 @@ async function getFreshOpenAIAccessTokenForPrompt(
   }
 }
 
-async function requestResponsesApi(
+export async function requestResponsesApi(
   baseUrl: string,
   model: string,
   apiKey: string,
   systemPrompt: string,
   userPrompt: string,
-  hostHeader?: string,
+  hostHeader: string | undefined,
 ): Promise<unknown> {
   const response = await fetchOptimizer(`${baseUrl}/responses`, {
     method: "POST",
-    headers: withOptionalHostHeader({
+    headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
-    }, hostHeader),
+    },
     body: JSON.stringify({
       model,
       input: [
@@ -283,24 +284,24 @@ async function requestResponsesApi(
         { role: "user", content: [{ type: "input_text", text: userPrompt }] },
       ],
     }),
-  });
+  }, hostHeader);
   return readOptimizerResponse(response, "Responses");
 }
 
-async function requestChatCompletionsApi(
+export async function requestChatCompletionsApi(
   baseUrl: string,
   model: string,
   apiKey: string,
   systemPrompt: string,
   userPrompt: string,
-  hostHeader?: string,
+  hostHeader: string | undefined,
 ): Promise<unknown> {
   const response = await fetchOptimizer(`${baseUrl}/chat/completions`, {
     method: "POST",
-    headers: withOptionalHostHeader({
+    headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
-    }, hostHeader),
+    },
     body: JSON.stringify({
       model,
       messages: [
@@ -309,23 +310,42 @@ async function requestChatCompletionsApi(
       ],
       temperature: 0.25,
     }),
-  });
+  }, hostHeader);
   return readOptimizerResponse(response, "Chat Completions");
 }
 
 // 提示词优化是前台同步等待的调用，超过一分钟直接判失败，别让页面一直转圈。
-async function fetchOptimizer(url: string, init: RequestInit): Promise<Response> {
+// 直连源站 IP 时 Host 头要真正发出去，所以走 fetchWithOriginHost 而不是裸 fetch；
+// hostHeader 是必填位（可为 undefined），免得哪个调用点忘了透传、静默退回裸 IP 的 Host。
+async function fetchOptimizer(
+  url: string,
+  init: OriginFetchInit,
+  hostHeader: string | undefined,
+): Promise<Response> {
   try {
-    return await fetch(url, { ...init, signal: AbortSignal.timeout(promptOptimizerTimeoutMs) });
+    return await fetchWithOriginHost(
+      url,
+      { ...init, signal: AbortSignal.timeout(promptOptimizerTimeoutMs) },
+      hostHeader,
+    );
   } catch (error) {
     throw toPromptOptimizerNetworkError(error);
   }
 }
 
-function toPromptOptimizerNetworkError(error: unknown): Error {
+/**
+ * 网络层错误转成前端能直接展示的中文短文案。
+ * 这个 message 会经 handleRouteError 原样回给页面，所以「connect ECONNREFUSED 1.2.3.4:80」这类
+ * 带源站 IP/端口的原文只能留在 cause 里（服务端日志可看），不能出现在 message。
+ */
+export function toPromptOptimizerNetworkError(error: unknown): Error {
   const name = error instanceof Error ? error.name : "";
   if (name === "TimeoutError" || name === "AbortError") {
     return new Error("提示词优化超时，请稍后重试或直接使用当前提示词。");
+  }
+  const network = describeNetworkError(error);
+  if (network) {
+    return new Error("提示词优化服务连接失败，请稍后重试或直接使用当前提示词。", { cause: error });
   }
   return error instanceof Error ? error : new Error("提示词优化调用失败");
 }

@@ -35,6 +35,17 @@ describe("model error formatting", () => {
     expect(formatModelError(413, "413 Request Entity Too Large nginx/1.24.0", "image edit failed")).toContain("参考图太大");
   });
 
+  test("explains upstream redirects as a channel configuration problem", () => {
+    const html = "<html><head><title>301 Moved Permanently</title></head><body>nginx</body></html>";
+    const detail = formatModelErrorDetail(301, html, "image edit failed");
+    expect(detail).toContain("源站返回重定向（301）");
+    expect(detail).toContain("Base URL");
+    expect(detail).toContain("Host");
+    expect(detail).toContain("HTTP 301");
+    expect(formatModelError(301, html, "image edit failed")).toBe("生成服务暂时不可用，请稍后重试。");
+    expect(formatModelError(307, "", "image edit failed")).toBe("生成服务暂时不可用，请稍后重试。");
+  });
+
   test("classifies missing balance or quota", () => {
     const payload = JSON.stringify({ error: { message: "You have insufficient quota. Please check your billing details." } });
     expect(formatModelErrorDetail(401, payload, "image generation failed")).toContain("模型账号余额或额度不足");

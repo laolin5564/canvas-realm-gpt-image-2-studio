@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { isImageTimeoutError, runAcrossChannels, runImageGenerationBatches } from "@/lib/image-batch";
+import {
+  isImageTimeoutError,
+  isPayloadTooLargeError,
+  isRedirectError,
+  runAcrossChannels,
+  runImageGenerationBatches,
+  shouldSwitchChannelByDefault,
+} from "@/lib/image-batch";
 import { isRetryableImageError, UpstreamImageError } from "@/lib/image-retry";
 
 function isAbort(error: unknown): boolean {
@@ -251,6 +258,149 @@ describe("超时收敛", () => {
 
     expect(harness.delivered.join(",")).toBe("a");
     expect((failure as DOMException).name).toBe("TimeoutError");
+  });
+});
+
+describe("413 请求体过大", () => {
+  test("识别 413，且默认切渠道判定覆盖超时与 413", () => {
+    expect(isPayloadTooLargeError(new UpstreamImageError("参考图太大", 413))).toBe(true);
+    expect(isPayloadTooLargeError(new UpstreamImageError("模型服务暂时不可用（503）", 503))).toBe(false);
+    expect(isPayloadTooLargeError(new Error("fetch failed"))).toBe(false);
+
+    expect(shouldSwitchChannelByDefault(new UpstreamImageError("参考图太大", 413))).toBe(true);
+    expect(shouldSwitchChannelByDefault(new DOMException("timed out", "TimeoutError"))).toBe(true);
+    expect(shouldSwitchChannelByDefault(new UpstreamImageError("模型服务暂时不可用（503）", 503))).toBe(false);
+  });
+
+  test("3xx 也直接切渠道：同渠道补发只会再吃一个跳转", async () => {
+    expect(isRedirectError(new UpstreamImageError("生成服务暂时不可用", 301))).toBe(true);
+    expect(isRedirectError(new UpstreamImageError("生成服务暂时不可用", 307))).toBe(true);
+    expect(isRedirectError(new UpstreamImageError("参考图太大", 413))).toBe(false);
+    expect(isRedirectError(new Error("fetch failed"))).toBe(false);
+    expect(shouldSwitchChannelByDefault(new UpstreamImageError("生成服务暂时不可用", 301))).toBe(true);
+    expect(shouldSwitchChannelByDefault(new UpstreamImageError("生成服务暂时不可用", 308))).toBe(true);
+
+    const harness = createHarness([
+      async () => {
+        throw new UpstreamImageError("生成服务暂时不可用，请稍后重试。", 301);
+      },
+      async () => {
+        throw new Error("301 后不应该在同一渠道补发");
+      },
+    ]);
+
+    let failure: unknown = null;
+    try {
+      await harness.run({ total: 1, concurrency: 1 });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(harness.requestCount).toBe(1);
+    expect((failure as UpstreamImageError).status).toBe(301);
+  });
+
+  test("runAcrossChannels 遇 301 会走到下一个渠道", async () => {
+    const attempts: string[] = [];
+    const delivered: string[] = [];
+
+    await runAcrossChannels({
+      channels: ["直连源站", "CF 域名"],
+      run: async (channel) => {
+        attempts.push(channel);
+        if (channel === "直连源站") {
+          throw new UpstreamImageError("生成服务暂时不可用，请稍后重试。", 301);
+        }
+        delivered.push("ok");
+      },
+      isAbort,
+      isRetryable: isRetryableImageError,
+      exhaustedMessage: "所有模型渠道均调用失败",
+    });
+
+    expect(attempts.join(",")).toBe("直连源站,CF 域名");
+    expect(delivered.join(",")).toBe("ok");
+  });
+
+  test("413 直接上抛换渠道，不在同渠道原样补发", async () => {
+    const harness = createHarness([
+      async () => {
+        throw new UpstreamImageError("参考图太大，请压缩后重试或减少参考图数量。", 413);
+      },
+      async () => {
+        throw new Error("413 后不应该在同一渠道补发");
+      },
+    ]);
+
+    let failure: unknown = null;
+    try {
+      await harness.run({ total: 1, concurrency: 1 });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(harness.requestCount).toBe(1);
+    expect(failure instanceof UpstreamImageError).toBe(true);
+    expect((failure as UpstreamImageError).status).toBe(413);
+  });
+
+  test("runAcrossChannels 遇 413 会走到下一个渠道", async () => {
+    const attempts: string[] = [];
+    const requestsPerChannel = new Map<string, number>();
+    const delivered: string[] = [];
+
+    await runAcrossChannels({
+      channels: ["直连源站", "CF 域名"],
+      run: (channel) => {
+        attempts.push(channel);
+        return runImageGenerationBatches<string>({
+          total: 1,
+          concurrency: 1,
+          delivered: () => delivered.length,
+          request: async () => {
+            const count = (requestsPerChannel.get(channel) ?? 0) + 1;
+            requestsPerChannel.set(channel, count);
+            if (channel === "直连源站") {
+              throw new UpstreamImageError("直连源站：参考图太大，请压缩后重试或减少参考图数量。", 413);
+            }
+            return ["ok"];
+          },
+          deliver: async (image) => {
+            delivered.push(image);
+          },
+          isAbort,
+          isRetryable: isRetryableImageError,
+        });
+      },
+      isAbort,
+      isRetryable: isRetryableImageError,
+      exhaustedMessage: "所有模型渠道均调用失败",
+    });
+
+    expect(attempts.join(",")).toBe("直连源站,CF 域名");
+    expect(requestsPerChannel.get("直连源站")).toBe(1);
+    expect(requestsPerChannel.get("CF 域名")).toBe(1);
+    expect(delivered.join(",")).toBe("ok");
+  });
+
+  test("所有渠道都 413 时抛出最后一个 413", async () => {
+    let failure: unknown = null;
+    try {
+      await runAcrossChannels({
+        channels: ["渠道一", "渠道二"],
+        run: async (channel) => {
+          throw new UpstreamImageError(`${channel}：参考图太大`, 413);
+        },
+        isAbort,
+        isRetryable: isRetryableImageError,
+        exhaustedMessage: "所有模型渠道均调用失败",
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect((failure as UpstreamImageError).status).toBe(413);
+    expect((failure as Error).message).toBe("渠道二：参考图太大");
   });
 });
 
