@@ -4904,3 +4904,141 @@ button.nav-link {
     display: none;
   }
 }
+
+/* ===== 折扣码：购买弹窗折扣区 + 管理后台折扣码页面 ===== */
+
+.ai-credit-discount {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.75rem 0.8rem;
+  border: 1px solid rgba(205, 215, 208, 0.9);
+  border-radius: 0.8rem;
+  background: rgba(248, 251, 249, 0.8);
+}
+
+.ai-credit-discount-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: #566259;
+  font-size: 0.82rem;
+  font-weight: 760;
+  cursor: pointer;
+}
+
+.ai-credit-discount-toggle input {
+  width: 0.95rem;
+  height: 0.95rem;
+  accent-color: var(--success);
+}
+
+.ai-credit-discount-body {
+  display: grid;
+  gap: 0.5rem;
+  justify-items: start;
+}
+
+.ai-credit-discount-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.55rem;
+  width: 100%;
+}
+
+.ai-credit-discount-row .input {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.ai-credit-discount-error,
+.ai-credit-discount-summary,
+.ai-credit-discount-hint {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.ai-credit-discount-error {
+  color: var(--danger);
+  font-weight: 700;
+}
+
+.ai-credit-discount-summary {
+  color: var(--success);
+  font-weight: 700;
+}
+
+.ai-credit-discount-hint {
+  color: var(--muted);
+}
+
+.ai-credit-price-discounted {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+
+.ai-credit-price-discounted s {
+  color: var(--faint);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.ai-credit-price-discounted em {
+  color: var(--success);
+  font-style: normal;
+}
+
+.admin-discount-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: 0.85rem;
+}
+
+.admin-discount-code {
+  font-family: var(--font-mono, ui-monospace, "SFMono-Regular", Menlo, monospace);
+  letter-spacing: 0.06em;
+}
+
+.admin-discount-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.admin-discount-empty {
+  display: block;
+  padding: 1.2rem 0;
+  color: var(--muted);
+  text-align: center;
+}
+
+.admin-discount-expand > td {
+  background: rgba(242, 248, 244, 0.72);
+}
+
+.admin-discount-expand-body {
+  display: grid;
+  gap: 0.85rem;
+  padding: 0.35rem 0.15rem 0.6rem;
+}
+
+.admin-discount-redemption-table {
+  min-width: 44rem;
+  background: rgba(255, 255, 255, 0.86);
+  border-radius: 0.7rem;
+}
+
+@media (max-width: 720px) {
+  .admin-discount-form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* .field > span 会把 hint 也当标签渲染，折扣码表单里单独压回提示样式。 */
+.admin-discount-form-grid .field > span.field-hint {
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 620;
+  line-height: 1.45;
+}

@@ -46,13 +46,47 @@ export interface AiImageQuotaResponse {
   message?: string;
 }
 
+/** 折扣码三种玩法：按比例折价 / 按金额立减 / 原价加送次数。 */
+export type DiscountType = "percent" | "amount" | "bonus";
+export type DiscountStatus = "active" | "disabled";
+
+/** POST /api/billing/ai-image/discount/preview 返回的试算结果。 */
+export interface AiImageDiscountPreview {
+  code: string;
+  type: DiscountType;
+  value: number;
+  unitCount: number;
+  chargedUnits: number;
+  creditCount: number;
+  originalPriceFen: number;
+  chargedPriceFen: number;
+  discountFen: number;
+  summary: string;
+}
+
+export interface AiImageDiscountPreviewResponse {
+  ok: boolean;
+  preview: AiImageDiscountPreview;
+}
+
+/** 下单成功后回带的折扣信息，未用折扣码时为 null。 */
+export interface AiImageOrderDiscount {
+  code: string;
+  summary: string;
+  chargedUnits: number;
+  discountFen: number;
+}
+
 export interface AiImagePaymentResponse {
   order: {
     qrCodeUrl: string;
     orderId: string;
     totalPriceFen: number;
+    /** 原始份数，折扣只影响实付金额，不影响这里。 */
     unitCount: number;
+    /** 实际发放的生成次数。 */
     generationCount: number;
+    discount?: AiImageOrderDiscount | null;
   };
   unitSize: number;
 }

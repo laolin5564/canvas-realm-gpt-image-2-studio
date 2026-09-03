@@ -765,7 +765,14 @@ export function WorkbenchClient() {
           paid={quotaController.buyOrderPaid}
           busy={quotaController.buyBusy}
           quotaLoading={quotaController.loading}
+          discountCode={quotaController.discountCode}
+          discountPreview={quotaController.discountPreview}
+          discountError={quotaController.discountError}
+          discountBusy={quotaController.discountBusy}
           onUnitCountChange={quotaController.setBuyUnitCount}
+          onDiscountCodeChange={quotaController.setDiscountCode}
+          onPreviewDiscount={quotaController.previewDiscount}
+          onClearDiscount={quotaController.clearDiscount}
           onCreateOrder={quotaController.createOrder}
           onRefreshQuota={() =>
             void quotaController.refresh().catch((caught: unknown) => notifyError(caught, "额度刷新失败"))

@@ -1,8 +1,10 @@
 "use client";
 
 /* eslint-disable @next/next/no-img-element */
-import { Check, QrCode, X } from "lucide-react";
-import type { AiImagePaymentResponse } from "@/components/workbench/types";
+import { useState } from "react";
+import { Check, QrCode, Ticket, X } from "lucide-react";
+import { discountPreviewLine, formatFenAsYuan, orderPaymentLine } from "@/components/workbench/discount-ui";
+import type { AiImageDiscountPreview, AiImagePaymentResponse } from "@/components/workbench/types";
 
 export function BuyCreditsModal({
   unitCount,
@@ -10,7 +12,14 @@ export function BuyCreditsModal({
   paid,
   busy,
   quotaLoading,
+  discountCode,
+  discountPreview,
+  discountError,
+  discountBusy,
   onUnitCountChange,
+  onDiscountCodeChange,
+  onPreviewDiscount,
+  onClearDiscount,
   onCreateOrder,
   onRefreshQuota,
   onClose,
@@ -20,11 +29,33 @@ export function BuyCreditsModal({
   paid: boolean;
   busy: boolean;
   quotaLoading: boolean;
+  discountCode: string;
+  discountPreview: AiImageDiscountPreview | null;
+  discountError: string;
+  discountBusy: boolean;
   onUnitCountChange: (value: number) => void;
+  onDiscountCodeChange: (value: string) => void;
+  onPreviewDiscount: () => void;
+  onClearDiscount: () => void;
   onCreateOrder: () => void;
   onRefreshQuota: () => void;
   onClose: () => void;
 }) {
+  const [discountOpen, setDiscountOpen] = useState(false);
+
+  // 份数改了但防抖重算还没回来时，上一份试算结果已经过期，不能拿它显示价格。
+  const activePreview = discountPreview && discountPreview.unitCount === unitCount ? discountPreview : null;
+  const previewStale = Boolean(discountPreview) && !activePreview;
+  const discountPending = discountOpen && discountCode.length > 0 && !activePreview;
+  const creditCount = activePreview ? activePreview.creditCount : unitCount * 10;
+
+  function toggleDiscount(next: boolean): void {
+    setDiscountOpen(next);
+    if (!next) {
+      onClearDiscount();
+    }
+  }
+
   return (
     <div className="admin-modal-backdrop" role="dialog" aria-modal="true" aria-label="购买AI图片生成次数">
       <div className="admin-modal ai-credit-modal">
@@ -48,16 +79,79 @@ export function BuyCreditsModal({
               onChange={(event) => onUnitCountChange(Math.max(Number.parseInt(event.target.value, 10) || 1, 1))}
             />
           </label>
+
+          <div className="ai-credit-discount">
+            <label className="ai-credit-discount-toggle">
+              <input
+                type="checkbox"
+                checked={discountOpen}
+                onChange={(event) => toggleDiscount(event.target.checked)}
+              />
+              <Ticket size={15} aria-hidden="true" />
+              <span>我有折扣码</span>
+            </label>
+            {discountOpen ? (
+              <div className="ai-credit-discount-body">
+                <div className="ai-credit-discount-row">
+                  <input
+                    className="input"
+                    value={discountCode}
+                    maxLength={32}
+                    placeholder="请输入折扣码，例如 SUMMER80"
+                    aria-label="折扣码"
+                    onChange={(event) => onDiscountCodeChange(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        onPreviewDiscount();
+                      }
+                    }}
+                  />
+                  <button
+                    className="button subtle"
+                    type="button"
+                    onClick={onPreviewDiscount}
+                    disabled={discountBusy || discountCode.length === 0}
+                  >
+                    {discountBusy ? "验证中" : "验证"}
+                  </button>
+                </div>
+                {discountError ? <p className="ai-credit-discount-error">{discountError}</p> : null}
+                {activePreview ? <p className="ai-credit-discount-summary">{discountPreviewLine(activePreview)}</p> : null}
+                {previewStale && !discountError ? (
+                  <p className="ai-credit-discount-hint">份数已变更，正在按新份数重新计算折扣…</p>
+                ) : null}
+                {discountCode.length > 0 ? (
+                  <button className="button subtle mini-button" type="button" onClick={onClearDiscount}>
+                    清除折扣码
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+
           <div className="ai-credit-order-summary">
             <span>
-              {unitCount} 份 = {unitCount * 10} 次生成额度
+              {unitCount} 份 = {creditCount} 次生成额度
             </span>
-            <strong>￥{unitCount.toFixed(2)}</strong>
+            {activePreview ? (
+              <strong className="ai-credit-price-discounted">
+                {activePreview.discountFen > 0 ? <s>{formatFenAsYuan(activePreview.originalPriceFen)}</s> : null}
+                <em>{formatFenAsYuan(activePreview.chargedPriceFen)}</em>
+              </strong>
+            ) : (
+              <strong>￥{unitCount.toFixed(2)}</strong>
+            )}
           </div>
-          <button className="button primary" type="button" onClick={onCreateOrder} disabled={busy}>
+          <button className="button primary" type="button" onClick={onCreateOrder} disabled={busy || discountPending}>
             <QrCode size={16} aria-hidden="true" />
             {busy ? "创建订单中" : "下单并生成支付二维码"}
           </button>
+          {discountPending ? (
+            <p className="ai-credit-discount-hint">
+              {previewStale || discountBusy ? "正在计算折扣，请稍候…" : "请先验证折扣码"}
+            </p>
+          ) : null}
           {order ? (
             <div className="ai-credit-qr">
               <img
@@ -70,7 +164,7 @@ export function BuyCreditsModal({
                 <span>
                   {paid
                     ? "已支付，额度已刷新"
-                    : `支付 ￥${(order.totalPriceFen / 100).toFixed(2)}，到账 ${order.generationCount} 次`}
+                    : orderPaymentLine(order.totalPriceFen, order.generationCount, order.discount)}
                 </span>
                 {paid ? (
                   <div className="ai-credit-payment-success">
