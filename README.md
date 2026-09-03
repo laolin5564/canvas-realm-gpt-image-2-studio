@@ -180,6 +180,8 @@ http://服务器IP:3000
 | --- | --- | --- |
 | `SUB2API_BASE_URL` | `https://your-sub2api.example.com/v1` | OpenAI-compatible 图片接口地址 |
 | `SUB2API_API_KEY` | 空 | 图片接口密钥 |
+| `SUB2API_MAX_UPLOAD_BYTES` | `15000000` | 一次图生图请求里参考图的总字节预算，超过会整体压缩 |
+| `SUB2API_MAX_IMAGE_BYTES` | `4000000` | 单张参考图上限，超过的那张单独压缩，其余不动 |
 | `IMAGE_MODEL` | `gpt-image-2` | 图片模型名 |
 | `IMAGE_STORAGE_DIR` | `./data/images` | 图片存储目录 |
 | `DATABASE_URL` | `file:./data/app.db` | SQLite 数据库路径 |

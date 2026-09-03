@@ -76,6 +76,7 @@ export const appConfig = {
   sub2apiBaseUrl: process.env.SUB2API_BASE_URL || "https://s2a.laolin.ai/v1",
   sub2apiHostHeader: normalizeHttpHostHeader(process.env.SUB2API_HOST_HEADER),
   sub2apiMaxUploadBytes: readNumberEnv("SUB2API_MAX_UPLOAD_BYTES", 15_000_000),
+  sub2apiMaxImageBytes: readNumberEnv("SUB2API_MAX_IMAGE_BYTES", 4_000_000),
   sub2apiApiKey: process.env.SUB2API_API_KEY || "",
   imageEditInputFidelity: process.env.IMAGE_EDIT_INPUT_FIDELITY ?? "high",
   imagePublicBaseUrl: (process.env.IMAGE_PUBLIC_BASE_URL || "").trim().replace(/\/+$/, ""),

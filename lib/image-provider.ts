@@ -162,7 +162,9 @@ export function createReferenceImageLoader(sourceImagePaths: string[]): Referenc
 
   const forUpload = (): Promise<ReferenceImageUpload[]> => {
     uploadPromise ??= raw().then((images) =>
-      fitReferenceImagesToBudget(images, appConfig.sub2apiMaxUploadBytes),
+      fitReferenceImagesToBudget(images, appConfig.sub2apiMaxUploadBytes, {
+        maxImageBytes: appConfig.sub2apiMaxImageBytes,
+      }),
     );
     return uploadPromise;
   };
