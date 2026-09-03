@@ -12,6 +12,7 @@ import {
   computeDiscount,
   discountCodeAlphabet,
   generatedDiscountCodeLength,
+  discountCodeFormatMessage,
   isValidDiscountCode,
   normalizeDiscountCode,
   validateDiscountCodeUsable,
@@ -1640,7 +1641,7 @@ export function createDiscountCode(input: CreateDiscountCodeInput): DiscountCode
 
   const explicitCode = normalizeDiscountCode(input.code ?? "");
   if (explicitCode && !isValidDiscountCode(explicitCode)) {
-    throw badRequest("折扣码只能是 4-32 位大写字母或数字");
+    throw badRequest(discountCodeFormatMessage);
   }
   const code = explicitCode || generateUniqueDiscountCode(database);
   if (castRow<DiscountCodeRow>(database.prepare("SELECT * FROM discount_codes WHERE code = ? LIMIT 1").get(code))) {
@@ -1699,7 +1700,7 @@ export function updateDiscountCode(id: string, input: UpdateDiscountCodeInput): 
   if (input.code !== undefined && input.code !== null) {
     const normalized = normalizeDiscountCode(input.code);
     if (!isValidDiscountCode(normalized)) {
-      throw badRequest("折扣码只能是 4-32 位大写字母或数字");
+      throw badRequest(discountCodeFormatMessage);
     }
     if (normalized !== existing.code) {
       const clash = getDiscountCodeByCode(normalized);

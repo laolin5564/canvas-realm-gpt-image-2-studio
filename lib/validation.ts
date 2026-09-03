@@ -1,7 +1,7 @@
 import { z } from "zod";
 import {
-  discountCodeMaxLength,
-  discountCodeMinLength,
+  discountCodeFormatMessage,
+  isValidDiscountCode,
   normalizeDiscountCode,
   validateDiscountValue,
 } from "./discount";
@@ -311,14 +311,11 @@ const nullableDateTimeString = z
   .transform((value) => (value && value.trim() !== "" ? value.trim() : null))
   .refine((value) => value === null || !Number.isNaN(Date.parse(value)), "时间格式不正确");
 
-/** 折扣码统一大写、4-32 位 A-Z0-9。 */
+/** 折扣码先归一化（NFKC + 去空白 + ASCII 大写），再按 lib/discount 的同一份规则校验。 */
 export const discountCodeSchema = z
   .string({ required_error: "请输入折扣码" })
   .transform((value) => normalizeDiscountCode(value))
-  .refine(
-    (value) => new RegExp(`^[A-Z0-9]{${discountCodeMinLength},${discountCodeMaxLength}}$`).test(value),
-    `折扣码只能是 ${discountCodeMinLength}-${discountCodeMaxLength} 位大写字母或数字`,
-  );
+  .refine((value) => isValidDiscountCode(value), discountCodeFormatMessage);
 
 export const previewDiscountSchema = z.object({
   discountCode: discountCodeSchema,

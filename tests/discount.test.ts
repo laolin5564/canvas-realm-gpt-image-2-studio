@@ -39,14 +39,45 @@ describe("normalizeDiscountCode / isValidDiscountCode", () => {
     expect(normalizeDiscountCode(undefined)).toBe("");
   });
 
-  test("格式只放行 4-32 位 A-Z0-9", () => {
-    expect(isValidDiscountCode("SAVE")).toBe(true);
-    expect(isValidDiscountCode("SAVE20")).toBe(true);
-    expect(isValidDiscountCode("ABC")).toBe(false);
+  test("全角字母数字与全角空格先被 NFKC 折成半角，再去掉空白", () => {
+    expect(normalizeDiscountCode("\uff54\uff4a\uff5a\uff4c")).toBe("TJZL");
+    expect(normalizeDiscountCode("\u3000\u53cc\u5341\u4e00\u3000")).toBe("双十一");
+    expect(normalizeDiscountCode("开学季\u30008折")).toBe("开学季8折");
+    expect(normalizeDiscountCode("开学季\uff18折")).toBe("开学季8折");
+  });
+
+  test("大小写只作用于 ASCII，中文原样保留", () => {
+    expect(normalizeDiscountCode(" 双十一 vIp ")).toBe("双十一VIP");
+    expect(normalizeDiscountCode("SuMmEr80")).toBe("SUMMER80");
+  });
+
+  test("中文码放行：常用汉字与扩展 A 都算合法字符", () => {
+    expect(isValidDiscountCode("双十一")).toBe(true);
+    expect(isValidDiscountCode("开学季8折")).toBe(true);
+    expect(isValidDiscountCode(normalizeDiscountCode("开学季 8折"))).toBe(true);
+    expect(isValidDiscountCode(normalizeDiscountCode("双十一vip"))).toBe(true);
+    expect(isValidDiscountCode("\u3400\u4db5")).toBe(true);
+  });
+
+  test("空白、标点与其它符号一律拒绝", () => {
+    expect(isValidDiscountCode("开学季 8折")).toBe(false);
+    expect(isValidDiscountCode("双十一！")).toBe(false);
+    expect(isValidDiscountCode("双十一_VIP")).toBe(false);
     expect(isValidDiscountCode("SAVE-20")).toBe(false);
     expect(isValidDiscountCode("save20")).toBe(false);
-    expect(isValidDiscountCode("A".repeat(33))).toBe(false);
+  });
+
+  test("长度按码点计，边界 2 与 32 都通过", () => {
+    expect(isValidDiscountCode("双")).toBe(false);
+    expect(isValidDiscountCode("A")).toBe(false);
+    expect(isValidDiscountCode("双十")).toBe(true);
+    expect(isValidDiscountCode("SAVE")).toBe(true);
+    expect(isValidDiscountCode("SAVE20")).toBe(true);
+    expect(isValidDiscountCode("ABC")).toBe(true);
     expect(isValidDiscountCode("A".repeat(32))).toBe(true);
+    expect(isValidDiscountCode("双".repeat(32))).toBe(true);
+    expect(isValidDiscountCode("A".repeat(33))).toBe(false);
+    expect(isValidDiscountCode("双".repeat(33))).toBe(false);
   });
 });
 
@@ -203,8 +234,28 @@ describe("折扣码入参校验（lib/validation）", () => {
   test("discountCodeSchema 大写化并卡格式", async () => {
     const { discountCodeSchema } = await import("../lib/validation");
     expect(discountCodeSchema.parse(" save20 ")).toBe("SAVE20");
-    expect(discountCodeSchema.safeParse("ab").success).toBe(false);
+    expect(discountCodeSchema.safeParse("a").success).toBe(false);
     expect(discountCodeSchema.safeParse("SAVE-20").success).toBe(false);
+  });
+
+  test("discountCodeSchema 放行中文码，并把全角、空格、小写一起归一化", async () => {
+    const { discountCodeSchema } = await import("../lib/validation");
+    expect(discountCodeSchema.parse("双十一")).toBe("双十一");
+    expect(discountCodeSchema.parse(" 开学季 8折 ")).toBe("开学季8折");
+    expect(discountCodeSchema.parse("开学季\uff18折")).toBe("开学季8折");
+    expect(discountCodeSchema.parse("\uff54\uff4a\uff5a\uff4c")).toBe("TJZL");
+    expect(discountCodeSchema.safeParse("开学季8折").success).toBe(true);
+  });
+
+  test("discountCodeSchema 不合法时给统一文案", async () => {
+    const { discountCodeSchema } = await import("../lib/validation");
+    const result = discountCodeSchema.safeParse("双");
+    expect(result.success).toBe(false);
+    expect(result.success ? "" : result.error.issues[0].message).toBe(
+      "折扣码为 2-32 位，支持中文、字母和数字",
+    );
+    expect(discountCodeSchema.safeParse("双十一！").success).toBe(false);
+    expect(discountCodeSchema.safeParse("双".repeat(33)).success).toBe(false);
   });
 
   test("previewDiscountSchema 要求份数 ≥ 1", async () => {
