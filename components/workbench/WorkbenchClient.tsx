@@ -108,9 +108,9 @@ export function WorkbenchClient() {
       if (result.oversized > 0) {
         pushToast(oversizedFilesMessage(result.oversized), "error");
       }
-      if (result.added === 0 && result.invalid > 0 && result.oversized === 0) {
+      // 超限与类型不支持各自独立提示：一次拖入「1 张 30MB+ 的 PNG + 1 个 PDF」两条都要说清楚。
+      if (result.invalid > 0 && result.added === 0) {
         pushToast("仅支持 PNG、JPG 或 WEBP 图片", "error");
-        return;
       }
       if (result.skipped > 0) {
         pushToast(`最多 ${maxReferenceImageCount} 张参考图，已忽略 ${result.skipped} 张。`, "error");
@@ -125,9 +125,9 @@ export function WorkbenchClient() {
       if (result.oversized > 0) {
         pushToast(oversizedFilesMessage(result.oversized), "error");
       }
-      if (result.added === 0 && result.invalid > 0 && result.oversized === 0) {
+      // 超限与类型不支持各自独立提示：一次拖入「1 张 30MB+ 的 PNG + 1 个 PDF」两条都要说清楚。
+      if (result.invalid > 0 && result.added === 0) {
         pushToast("仅支持 PNG、JPG 或 WEBP 图片", "error");
-        return;
       }
       if (result.skipped > 0) {
         pushToast(`最多 ${maxReferenceImageCount} 张图片，已忽略 ${result.skipped} 张。`, "error");

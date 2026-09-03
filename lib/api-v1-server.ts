@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { appConfig } from "./config";
 import { assertApiEnabled, requireApiKeyUser, type ApiKeyPrincipal } from "./auth";
 import {
   apiError,
@@ -12,8 +11,6 @@ import {
 } from "./api-v1";
 import {
   countActiveApiTasks,
-  createId,
-  createSourceImage,
   getApiSigningSecret,
   getGenerationTask,
   getTaskImages,
@@ -21,8 +18,9 @@ import {
 import { assertQuotaAvailable } from "./permissions";
 import { assertApiKeyRateLimit } from "./rate-limit";
 import { signedFileUrl, signedUrlExpiry } from "./signed-url";
-import { normalizeSourceImage, type NormalizedSourceImage } from "./source-image-normalize";
-import { assertSupportedImageBytes, readStorageFile, saveSourceImageFile } from "./storage";
+import { storeSourceImages } from "./source-image-store";
+import { detectImageMime, prepareSourceImage, type PreparedSourceImage } from "./source-image-upload";
+import { ImageValidationError, readStorageFile } from "./storage";
 import type { CurrentUser, GeneratedImageRow, GenerationTaskRow } from "./types";
 
 /** 每用户同时最多几个 queued/processing 的 API 任务。 */
@@ -161,59 +159,44 @@ export async function toApiImageData(
   return data;
 }
 
-/** 单张参考图原始文件上限；落盘前会再归一化（转正 / 最长边 / 体积），所以这里只拦明显离谱的。 */
-const maxApiUploadBytes = appConfig.sourceImageMaxUploadBytes;
+/**
+ * 开放 API 的参考图落盘：先把所有图校验 + 归一化完，再统一写盘建记录（两阶段），任何一张有问题都不会
+ * 留下孤儿文件 / 记录。只有 ImageValidationError（用户的图有问题）收敛成 validation_error，
+ * 其余异常（sharp 不可用、磁盘写失败……）原样上抛走 500，不把内部错误当参数错误回给调用方。
+ */
+export async function saveApiSourceImages(
+  userId: string,
+  images: readonly { bytes: Uint8Array; mimeType: string | null; originalName: string | null }[],
+): Promise<string[]> {
+  const prepared: PreparedSourceImage[] = [];
+  for (const image of images) {
+    try {
+      prepared.push(await prepareSourceImage(image));
+    } catch (error) {
+      if (error instanceof ImageValidationError) {
+        throw apiError("validation_error", error.message);
+      }
+      throw error;
+    }
+  }
+  const rows = await storeSourceImages(userId, prepared);
+  return rows.map((row) => row.id);
+}
 
-/** 从 multipart 文件或 base64 字符串落一张参考图，归属调用方账号。 */
+/** 单张便捷入口，语义同 saveApiSourceImages。 */
 export async function saveApiSourceImage(input: {
   userId: string;
   bytes: Uint8Array;
   mimeType: string | null;
   originalName: string | null;
 }): Promise<string> {
-  if (input.bytes.length === 0) {
-    throw apiError("validation_error", "参考图内容为空");
-  }
-  if (input.bytes.length > maxApiUploadBytes) {
-    throw apiError("validation_error", `单张参考图不能超过 ${Math.round(maxApiUploadBytes / (1024 * 1024))} MB，请压缩后再上传`);
-  }
-
-  const mimeType = input.mimeType ?? detectImageMime(input.bytes);
-  try {
-    assertSupportedImageBytes(input.bytes, mimeType);
-  } catch (error) {
-    throw apiError("validation_error", error instanceof Error ? error.message : "仅支持 PNG、JPG、WEBP 图片");
-  }
-
-  let normalized: NormalizedSourceImage;
-  try {
-    normalized = await normalizeSourceImage(input.bytes, mimeType, {
-      maxDimension: appConfig.sourceImageMaxDimension,
-      targetBytes: appConfig.sourceImageTargetBytes,
-    });
-  } catch (error) {
-    throw apiError("validation_error", error instanceof Error ? error.message : "图片文件损坏或无法解析");
-  }
-
-  const sourceId = createId("src");
-  const filePath = await saveSourceImageFile({
-    sourceId,
-    fileName: input.originalName ?? `${sourceId}`,
-    bytes: normalized.bytes,
-    mimeType: normalized.mimeType,
-  });
-  const source = createSourceImage({
-    userId: input.userId,
-    filePath,
-    width: normalized.width,
-    height: normalized.height,
-    originalName: input.originalName,
-    mimeType: normalized.mimeType,
-  });
-  return source.id;
+  const [id] = await saveApiSourceImages(input.userId, [input]);
+  return id;
 }
 
 /** data URL 与纯 base64 都收；识别不出内容类型时按魔数兜底。 */
+export { detectImageMime };
+
 export function decodeBase64Image(value: string): { bytes: Uint8Array; mimeType: string | null } {
   const trimmed = value.trim();
   const dataUrl = trimmed.match(/^data:([a-zA-Z0-9.+/-]+);base64,(.*)$/s);
@@ -227,21 +210,4 @@ export function decodeBase64Image(value: string): { bytes: Uint8Array; mimeType:
     throw apiError("validation_error", "image_base64 解码后为空");
   }
   return { bytes, mimeType: dataUrl ? dataUrl[1] : detectImageMime(bytes) };
-}
-
-export function detectImageMime(bytes: Uint8Array): string | null {
-  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
-    return "image/png";
-  }
-  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
-    return "image/jpeg";
-  }
-  if (
-    bytes.length >= 12 &&
-    String.fromCharCode(...bytes.slice(0, 4)) === "RIFF" &&
-    String.fromCharCode(...bytes.slice(8, 12)) === "WEBP"
-  ) {
-    return "image/webp";
-  }
-  return null;
 }

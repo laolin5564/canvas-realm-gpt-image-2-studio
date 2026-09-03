@@ -3,8 +3,10 @@ import sharp from "sharp";
 import { ImageValidationError } from "@/lib/storage";
 import {
   normalizeSourceImage,
+  pixelLimitMessage,
   sourceImageMinDimension,
   sourceImageQualitySteps,
+  sourceImageShrinkRatio,
 } from "@/lib/source-image-normalize";
 
 function noiseRaw(width: number, height: number, channels: 3 | 4): Buffer {
@@ -84,29 +86,74 @@ describe("normalizeSourceImage: 尺寸与体积", () => {
     expect(result.height).toBe(200);
   });
 
-  test("超过 targetBytes 的噪声图：输出 ≤ targetBytes 或已走到阶梯底", async () => {
+  test("质量阶梯足够时：输出 ≤ targetBytes，且与逐档直接编码逐字节一致（阶梯结果不因中间缓冲改变）", async () => {
     const bytes = await noisePng(1200, 900);
-    const targetBytes = 120_000;
-    expect(bytes.length).toBeGreaterThan(targetBytes);
+    const direct = await sharp(Buffer.from(bytes))
+      .resize({ width: 1000, height: 1000, fit: "inside", withoutEnlargement: true })
+      .webp({ quality: 90 })
+      .toBuffer();
+    // 目标略高于 q90 的产物：第一档就该命中，输出必须正是那一份。
+    const targetBytes = direct.length + 1;
 
-    const result = await normalizeSourceImage(bytes, "image/png", { maxDimension: 1200, targetBytes });
+    const result = await normalizeSourceImage(bytes, "image/png", { maxDimension: 1000, targetBytes });
     expect(result.changed).toBe(true);
     expect(result.mimeType).toBe("image/webp");
-    expect(result.bytes.length).toBeLessThan(bytes.length);
-    const reachedFloor = Math.max(result.width, result.height) <= sourceImageMinDimension;
-    expect(result.bytes.length <= targetBytes || reachedFloor).toBe(true);
-    // 尺寸阶梯最低 1024：1200 → 1024 就停，不会更小。
-    expect(Math.max(result.width, result.height)).toBeGreaterThan(sourceImageMinDimension - 1);
+    expect(result.width).toBe(1000);
+    expect(result.height).toBe(750);
+    expect(result.bytes.length <= targetBytes).toBe(true);
+    expect(Buffer.from(result.bytes).equals(direct)).toBe(true);
   });
 
-  test("体积超目标但尺寸本来就小于 1024 时只走质量阶梯，不缩尺寸", async () => {
+  test("阶梯到底仍超：尺寸缩到 1024 下限后返回所有候选里最小的一份", async () => {
+    const bytes = await noisePng(1200, 900);
+    // targetBytes = 1 永远达不到：1200 → 1024（下限）两档尺寸 × 4 档质量共 8 个候选，交出最小的。
+    const result = await normalizeSourceImage(bytes, "image/png", { maxDimension: 1200, targetBytes: 1 });
+
+    const dimensions = [1200, Math.max(sourceImageMinDimension, Math.floor(1200 * sourceImageShrinkRatio))];
+    expect(dimensions[1]).toBe(1024);
+    const candidates: number[] = [];
+    for (const dimension of dimensions) {
+      for (const quality of sourceImageQualitySteps) {
+        const encoded = await sharp(Buffer.from(bytes))
+          .resize({ width: dimension, height: dimension, fit: "inside", withoutEnlargement: true })
+          .webp({ quality })
+          .toBuffer();
+        candidates.push(encoded.length);
+      }
+    }
+    expect(result.changed).toBe(true);
+    expect(Math.max(result.width, result.height)).toBe(sourceImageMinDimension);
+    expect(result.bytes.length).toBe(Math.min(...candidates));
+    expect(result.bytes.length).toBeLessThan(bytes.length);
+  });
+
+  test("体积超目标但尺寸本来就小于 1024 时只走质量阶梯，不缩尺寸，返回最低质量档", async () => {
     const bytes = await noisePng(600, 400);
     const result = await normalizeSourceImage(bytes, "image/png", { targetBytes: 1 });
+    const lowest = await sharp(Buffer.from(bytes))
+      .webp({ quality: sourceImageQualitySteps[sourceImageQualitySteps.length - 1] })
+      .toBuffer();
     expect(result.changed).toBe(true);
     expect(result.width).toBe(600);
     expect(result.height).toBe(400);
-    expect(result.bytes.length).toBeGreaterThan(1);
-    expect(sourceImageQualitySteps.length).toBe(4);
+    expect(result.bytes.length).toBe(lowest.length);
+  });
+});
+
+describe("normalizeSourceImage: 像素上限", () => {
+  test("宽 × 高超过 maxPixels 直接拒绝（400），不进解码", async () => {
+    const bytes = await flatPng(400, 300);
+    const error = await normalizeSourceImage(bytes, "image/png", { maxPixels: 100_000 }).catch((caught: unknown) => caught);
+    expect(error instanceof ImageValidationError).toBe(true);
+    expect((error as ImageValidationError).status).toBe(400);
+    expect((error as Error).message).toBe(pixelLimitMessage(100_000));
+    expect((error as Error).message).toContain("图片像素过大");
+  });
+
+  test("刚好等于 maxPixels 放行", async () => {
+    const bytes = await flatPng(400, 300);
+    const result = await normalizeSourceImage(bytes, "image/png", { maxPixels: 120_000 });
+    expect(result.width).toBe(400);
   });
 });
 
@@ -143,6 +190,48 @@ describe("normalizeSourceImage: alpha / EXIF / 动图", () => {
     expect(after.height).toBe(300);
     expect(after.orientation).toBe(undefined);
     expect(after.exif).toBe(undefined);
+  });
+
+  test("重编码时保留 ICC 色彩配置但不带 EXIF（keepIccProfile ≠ withMetadata）", async () => {
+    const jpeg = new Uint8Array(
+      await sharp({ create: { width: 3000, height: 100, channels: 3, background: "#ff8800" } })
+        .jpeg()
+        .withIccProfile("p3")
+        .withExif({ IFD0: { Copyright: "canvas-realm-test" } })
+        .toBuffer(),
+    );
+    const before = await sharp(Buffer.from(jpeg)).metadata();
+    expect(before.icc?.length ?? 0).toBeGreaterThan(0);
+    expect(before.exif?.length ?? 0).toBeGreaterThan(0);
+
+    const result = await normalizeSourceImage(jpeg, "image/jpeg");
+    expect(result.changed).toBe(true);
+    expect(result.width).toBe(2048);
+
+    const after = await sharp(Buffer.from(result.bytes)).metadata();
+    expect(after.icc?.length).toBe(before.icc?.length);
+    expect(after.exif).toBe(undefined);
+  });
+
+  test("直通路径不重编码：orientation=1 且尺寸 / 体积不超的 JPEG 原字节返回，EXIF 原样保留", async () => {
+    const jpeg = new Uint8Array(
+      await sharp({ create: { width: 300, height: 100, channels: 3, background: "#ff8800" } })
+        .jpeg()
+        .withExif({ IFD0: { Copyright: "canvas-realm-test" }, IFD3: { GPSLatitudeRef: "N" } })
+        .toBuffer(),
+    );
+    const before = await sharp(Buffer.from(jpeg)).metadata();
+    expect(before.exif?.length ?? 0).toBeGreaterThan(0);
+    expect(before.orientation ?? 1).toBe(1);
+
+    const result = await normalizeSourceImage(jpeg, "image/jpeg");
+    expect(result.changed).toBe(false);
+    expect(result.bytes).toBe(jpeg);
+    expect(result.mimeType).toBe("image/jpeg");
+
+    const after = await sharp(Buffer.from(result.bytes)).metadata();
+    expect(after.exif?.length).toBe(before.exif?.length);
+    expect(Buffer.from(result.bytes).includes("canvas-realm-test")).toBe(true);
   });
 
   test("动图只取首帧", async () => {

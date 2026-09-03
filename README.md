@@ -185,7 +185,6 @@ http://服务器IP:3000
 | `DATABASE_URL` | `file:./data/app.db` | SQLite 数据库路径 |
 | `IMAGE_REQUEST_TIMEOUT_MS` | `300000` | 模型请求超时时间 |
 | `WORKER_POLL_INTERVAL_MS` | `3000` | Worker 轮询间隔 |
-| `SOURCE_IMAGE_MAX_UPLOAD_BYTES` | `31457280` | 参考图原始文件上限（30 MB），超过直接拒绝 |
 | `SOURCE_IMAGE_MAX_DIMENSION` | `2048` | 参考图落盘前的最长边上限（像素），超过按比例缩小 |
 | `SOURCE_IMAGE_TARGET_BYTES` | `3000000` | 参考图落盘体积软目标（约 3 MB），超过重编码为 webp |
 | `APP_BASE_URL` | 空 | 部署域名，用于部分回调和 Cookie 判断 |
@@ -194,6 +193,8 @@ http://服务器IP:3000
 | `WEB_UPDATE_ENABLED` | `false` | 是否允许后台触发 Web 一键更新 |
 | `WEB_UPDATE_REPO_DIR` | `/app` | Web 更新执行目录 |
 | `OPENAI_OAUTH_TOKEN_ENCRYPTION_KEY` | 空 | 内置 OAuth token 加密 key |
+
+参考图单张原始上限固定 30 MB（`lib/validation.ts` 的 `maxSourceImageUploadBytes`，前端预检与服务端共用同一常量，不可通过环境变量调整）；像素总量上限 6400 万。开放 API 一次最多 4 张，所以前置网关（nginx / Cloudflare 等）的 `client_max_body_size` 需 ≥ 128 MB（至少 ≥ 32 MB 才能让单张 30 MB 上传到达应用）。
 
 内置 OAuth 模式必须配置 `OPENAI_OAUTH_TOKEN_ENCRYPTION_KEY`。建议使用 32 字节以上随机字符串，或 `base64:` 前缀的 32 字节 key。丢失该 key 后，已保存 token 无法解密，需要重新连接账号。
 

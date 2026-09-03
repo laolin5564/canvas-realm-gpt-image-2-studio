@@ -3593,6 +3593,11 @@ export function getSourceImage(id: string): SourceImageRow | null {
   );
 }
 
+/** 仅供上传两阶段回滚：落盘中途失败时把已建的记录删掉。 */
+export function deleteSourceImage(id: string): void {
+  getDb().prepare("DELETE FROM source_images WHERE id = ?").run(id);
+}
+
 export function getSourceImageByFilePath(filePath: string): SourceImageRow | null {
   return castRow<SourceImageRow>(
     getDb()

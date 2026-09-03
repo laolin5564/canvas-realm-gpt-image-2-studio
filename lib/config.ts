@@ -79,8 +79,9 @@ export const appConfig = {
   sub2apiMaxUploadBytes: readNumberEnv("SUB2API_MAX_UPLOAD_BYTES", 15_000_000),
   sub2apiApiKey: process.env.SUB2API_API_KEY || "",
   imageEditInputFidelity: process.env.IMAGE_EDIT_INPUT_FIDELITY ?? "high",
-  // 参考图上传入口：原始文件硬上限、落盘前的最长边与体积软目标。
-  sourceImageMaxUploadBytes: readNumberEnv("SOURCE_IMAGE_MAX_UPLOAD_BYTES", maxSourceImageUploadBytes),
+  // 参考图上传入口：原始文件硬上限固定 30MB（lib/validation.ts 的常量是唯一真源，前端预检同一份，不走环境变量）；
+  // 落盘前的最长边与体积软目标可配。
+  sourceImageMaxUploadBytes: maxSourceImageUploadBytes,
   sourceImageMaxDimension: readNumberEnv("SOURCE_IMAGE_MAX_DIMENSION", 2048),
   sourceImageTargetBytes: readNumberEnv("SOURCE_IMAGE_TARGET_BYTES", 3_000_000),
   imagePublicBaseUrl: (process.env.IMAGE_PUBLIC_BASE_URL || "").trim().replace(/\/+$/, ""),
