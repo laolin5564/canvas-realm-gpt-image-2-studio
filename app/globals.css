@@ -367,6 +367,11 @@ button.nav-link {
   line-height: 1.5;
 }
 
+/* .field 是 grid，靠 gap 排版；直接放 <p> 会多出默认外边距，这里压掉。 */
+.field > p.field-hint {
+  margin: 0;
+}
+
 .settings-subsection {
   display: grid;
   gap: 0.85rem;

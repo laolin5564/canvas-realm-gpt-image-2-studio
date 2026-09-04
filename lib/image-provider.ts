@@ -9,7 +9,7 @@ import {
   updateOpenAIOAuthAccountStatus,
   updateOpenAIOAuthAccountTokens,
 } from "./db";
-import { apiQualityForOption, apiSizeForOption } from "./image-options";
+import { apiQualityForOption, apiSizeForOption, ratioPromptTextForOption } from "./image-options";
 import { totalReferenceImageBytes } from "./image-upload";
 import { runAcrossChannels, runImageGenerationBatches, shouldSwitchChannelByDefault } from "./image-batch";
 import {
@@ -499,6 +499,17 @@ export function buildPrompt(task: GenerationTaskRow, referenceCount: number): st
   const parts = [task.prompt.trim()];
   if (task.negative_prompt && task.negative_prompt.trim() !== "") {
     parts.push(`避免出现：${task.negative_prompt.trim()}`);
+  }
+
+  // 落盘不再按比例裁切，画幅只能靠提示词交代——API 的 size 只有三档且上游经常不遵守，
+  // 但实测上游会遵守提示词里写的比例（写了「3:4 竖版首图」就直接返回原生 3:4）。
+  const ratioText = ratioPromptTextForOption(task.size);
+  if (ratioText) {
+    // 「9:16 竖版」里的比例串；提示词或提示词优化器已经写过同一个比例时不重复啰嗦。
+    const ratioLabel = ratioText.split(" ")[0];
+    if (!parts.join("\n").includes(ratioLabel)) {
+      parts.push(`画幅比例：${ratioText}，请按此比例完整构图，主体与文字不要贴边。`);
+    }
   }
 
   // 强度数字对上游是纯噪声（模型并不按这两个小数调节），只有多图时的主图/参考图关系才有信息量。

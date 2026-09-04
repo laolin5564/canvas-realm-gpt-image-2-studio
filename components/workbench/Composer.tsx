@@ -327,6 +327,7 @@ export function Composer(props: ComposerProps) {
                 </option>
               ))}
             </select>
+            <p className="field-hint">按所选比例构图出图，不裁切画面</p>
           </div>
           <div className="field">
             <label htmlFor="quality">质量</label>

@@ -1,7 +1,6 @@
 import { mkdir, readFile, rm, rmdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { appConfig } from "./config";
-import { ratioForOption } from "./image-options";
 
 const supportedImageMimeTypes = new Set(["image/png", "image/jpeg", "image/webp"]);
 
@@ -63,10 +62,6 @@ export function mimeFromFileName(fileName: string): string {
   return "image/png";
 }
 
-export function parseSize(size: string): { width: number; height: number } {
-  return ratioForOption(size);
-}
-
 export function datedPathParts(date = new Date()): string[] {
   return [
     String(date.getFullYear()),
@@ -110,49 +105,26 @@ export interface SavedGeneratedImage {
   height: number;
 }
 
-/** 实际比例与目标比例的允许偏差（相对值）。 */
-export const RATIO_TOLERANCE = 0.02;
-
-export async function fitImageToTargetRatio(
+/**
+ * 只读真实像素，绝不改动上游字节。
+ * 上游是把整幅画布当成完整作品来构图的（漫画分镜、海报文字都铺满画布），
+ * 按目标比例裁切会直接切掉分镜编号与标题；画幅比例改由提示词交代给上游。
+ */
+export async function readImageDimensions(
   bytes: Uint8Array,
-  targetRatio?: { width: number; height: number },
-): Promise<{ bytes: Uint8Array; width: number; height: number }> {
+): Promise<{ width: number; height: number }> {
   const sharp = await loadSharp();
   if (!sharp) {
-    // 没装 sharp 时保持原样落盘，尺寸未知。
-    return { bytes, width: 0, height: 0 };
+    // 没装 sharp 时尺寸未知，照样原样落盘。
+    return { width: 0, height: 0 };
   }
 
   try {
     const metadata = await sharp(Buffer.from(bytes)).metadata();
-    const width = metadata.width ?? 0;
-    const height = metadata.height ?? 0;
-    const ratio = targetRatio && targetRatio.width > 0 && targetRatio.height > 0 ? targetRatio : null;
-    if (!ratio || width <= 0 || height <= 0) {
-      return { bytes, width, height };
-    }
-
-    const target = ratio.width / ratio.height;
-    const actual = width / height;
-    if (Math.abs(actual - target) <= target * RATIO_TOLERANCE) {
-      return { bytes, width, height };
-    }
-
-    // 上游经常不严格遵守 size（例如统一返回 1254px 方图），这里按目标比例居中裁切。
-    const cropWidth = actual > target ? Math.max(1, Math.round(height * target)) : width;
-    const cropHeight = actual > target ? height : Math.max(1, Math.round(width / target));
-    const cropped = await sharp(Buffer.from(bytes))
-      .resize({ width: cropWidth, height: cropHeight, fit: "cover", position: "centre" })
-      .toBuffer();
-    const croppedMetadata = await sharp(cropped).metadata();
-    return {
-      bytes: new Uint8Array(cropped),
-      width: croppedMetadata.width ?? cropWidth,
-      height: croppedMetadata.height ?? cropHeight,
-    };
+    return { width: metadata.width ?? 0, height: metadata.height ?? 0 };
   } catch {
-    // 解码/裁切失败时不阻断落盘，退回原始字节。
-    return { bytes, width: 0, height: 0 };
+    // 解码失败不阻断落盘。
+    return { width: 0, height: 0 };
   }
 }
 
@@ -161,8 +133,6 @@ export async function saveGeneratedImageFile(input: {
   imageId: string;
   bytes: Uint8Array;
   mimeType: string | null;
-  /** 目标宽高比（宽高任一 <= 0 表示 auto，不裁切）。 */
-  targetRatio?: { width: number; height: number };
 }): Promise<SavedGeneratedImage> {
   const extension = extensionForMime(input.mimeType);
   const relativePath = path.posix.join(
@@ -170,14 +140,14 @@ export async function saveGeneratedImageFile(input: {
     input.taskId,
     `${input.imageId}.${extension}`,
   );
-  const fitted = await fitImageToTargetRatio(input.bytes, input.targetRatio);
-  await writeStorageFile(relativePath, fitted.bytes);
+  const { width, height } = await readImageDimensions(input.bytes);
+  await writeStorageFile(relativePath, input.bytes);
   try {
-    await generateThumbnailFile(relativePath, fitted.bytes);
+    await generateThumbnailFile(relativePath, input.bytes);
   } catch {
     // 缩略图失败不影响原图落盘，列表端会自动回退加载原图。
   }
-  return { relativePath, width: fitted.width, height: fitted.height };
+  return { relativePath, width, height };
 }
 
 export async function saveSourceImageFile(input: {

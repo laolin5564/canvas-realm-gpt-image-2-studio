@@ -46,6 +46,9 @@ export function ImageResultCard({
 }) {
   const imageDirectBase = useImageDirectBase();
   const ratioClass = image.height > image.width ? "tall" : image.width > image.height ? "wide" : "";
+  // 成图不再裁切，缩略框跟着真实像素比例走，免得列表里又把 9:16 / 2.35:1 视觉裁一次。
+  const frameStyle =
+    image.width > 0 && image.height > 0 ? { aspectRatio: `${image.width} / ${image.height}` } : undefined;
 
   return (
     <article className={clsx("image-card", selected && "selected")}>
@@ -55,7 +58,7 @@ export function ImageResultCard({
         onClick={() => actions.onOpen(image, siblings)}
         title="查看大图"
       >
-        <div className={clsx("image-frame", ratioClass)}>
+        <div className={clsx("image-frame", ratioClass)} style={frameStyle}>
           <img
             src={withDirectBase(imageDirectBase, image.thumbnailUrl ?? image.url)}
             alt={image.prompt}

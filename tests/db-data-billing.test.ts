@@ -8,6 +8,7 @@ const repoRoot = path.resolve(".");
 const tsxBin = path.join(repoRoot, "node_modules", ".bin", "tsx");
 const nodeSuites = [
   "api-v1.node.ts",
+  "build-prompt-ratio.node.ts",
   "db-data-billing.node.ts",
   "db-migration.node.ts",
   "discount-codes.node.ts",

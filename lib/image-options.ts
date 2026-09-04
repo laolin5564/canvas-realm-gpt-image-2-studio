@@ -118,6 +118,29 @@ export function ratioForOption(value: string): { width: number; height: number }
   return imageSizeRatioMap[normalizeImageSizeOption(value)];
 }
 
+function formatRatioLabel(width: number, height: number): string {
+  if (width < 100 && height < 100) {
+    return `${width}:${height}`;
+  }
+  // 2.35:1 档在比例表里记成 235:100，直接写会变成「235:100」，这里还原成人看得懂的小数写法。
+  const round = (value: number): number => Number(value.toFixed(2));
+  return width >= height ? `${round(width / height)}:1` : `1:${round(height / width)}`;
+}
+
+/**
+ * 画幅比例的提示词文本（auto 返回 null）。
+ * 落盘不再按比例裁切，比例只能靠提示词让上游自己按这个画幅构图——实测上游会遵守提示词里写的比例。
+ */
+export function ratioPromptTextForOption(value: string): string | null {
+  const ratio = ratioForOption(value);
+  if (ratio.width <= 0 || ratio.height <= 0) {
+    return null;
+  }
+
+  const orientation = ratio.width > ratio.height ? "横版" : ratio.width < ratio.height ? "竖版" : "方图";
+  return `${formatRatioLabel(ratio.width, ratio.height)} ${orientation}`;
+}
+
 export function sizeFromDimensions(width: number, height: number): ImageSizeOption {
   if (width <= 0 || height <= 0) {
     return "auto";

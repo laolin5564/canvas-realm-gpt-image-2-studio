@@ -464,7 +464,15 @@ export function HistoryClient({ embedded = false }: { embedded?: boolean } = {})
                   title={selectionMode ? "选择历史图片" : "查看大图"}
                   aria-label={selectionMode ? "选择历史图片" : "查看大图"}
                 >
-                  <div className={clsx("image-frame", image.height > image.width && "tall", image.width > image.height && "wide")}>
+                  <div
+                    className={clsx("image-frame", image.height > image.width && "tall", image.width > image.height && "wide")}
+                    // 成图不再裁切，缩略框跟着真实像素比例走；宽高未知时退回 class 里的固定比例。
+                    style={
+                      image.width > 0 && image.height > 0
+                        ? { aspectRatio: `${image.width} / ${image.height}` }
+                        : undefined
+                    }
+                  >
                     <img
                       src={withDirectBase(imageDirectBase, image.thumbnailUrl ?? image.url)}
                       alt={image.prompt}

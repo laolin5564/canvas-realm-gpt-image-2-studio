@@ -91,6 +91,12 @@ export function ImageLightbox({ images, index, onNavigate, onClose }: ImageLight
               {safeIndex + 1} / {total}
             </span>
           ) : null}
+          {/* 成图不再裁切，这里报的就是上游返回的真实像素。 */}
+          {image.width > 0 && image.height > 0 ? (
+            <span className="image-lightbox-counter">
+              {image.width} × {image.height}
+            </span>
+          ) : null}
           <button
             className="icon-button ghost"
             type="button"

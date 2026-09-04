@@ -184,7 +184,7 @@ export function ApiDocs({ origin, onNotice }: ApiDocsProps) {
                   <tr>
                     <th>选项键</th>
                     <th>用途</th>
-                    <th>输出像素</th>
+                    <th>上游请求尺寸</th>
                   </tr>
                 </thead>
                 <tbody>

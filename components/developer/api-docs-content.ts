@@ -366,6 +366,7 @@ export interface SizeRow {
   pixels: string;
 }
 
+// pixels 是「传给上游的请求尺寸」，不是成图像素：成图不裁切，实际像素以 width/height 为准。
 export const sizeRows: SizeRow[] = sizeOptions.map((option) => ({
   option,
   label: imageSizeLabels[option],
@@ -388,6 +389,7 @@ export const paramNotes: string[] = [
   "quality 默认 high；填 auto 表示不指定，交给上游模型决定。",
   "n 只接受 1 / 2 / 4，其它值返回 400 validation_error。",
   "size 传尺寸选项键（不是像素串），传 auto 表示不限制画幅。",
+  "size 决定构图比例（会写进提示词并传给上游），成图不做任何裁切；实际像素以返回的 width/height 为准，上游可能返回相近比例。",
   "文生图 mode 恒为 text_to_image，图生图 mode 恒为 image_to_image。",
 ];
 

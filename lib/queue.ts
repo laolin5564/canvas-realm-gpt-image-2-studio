@@ -14,7 +14,6 @@ import {
   updateTaskProgressStage,
 } from "./db";
 import { normalizeImageConcurrency } from "./concurrency";
-import { ratioForOption } from "./image-options";
 import { callImageModel } from "./image-provider";
 import { isModelTimeoutMessage } from "./model-error";
 import { describeTaskFailure } from "./model-error-detail";
@@ -32,7 +31,6 @@ export async function processNextQueuedTask(): Promise<boolean> {
 }
 
 async function processClaimedTask(task: GenerationTaskRow): Promise<void> {
-  const targetRatio = ratioForOption(task.size);
   // 重启续跑：上个进程可能已经落了几张，从已落库张数起步，不重复出图。
   const alreadyDelivered = getTaskImages(task.id).length;
   let savedCount = alreadyDelivered;
@@ -77,7 +75,6 @@ async function processClaimedTask(task: GenerationTaskRow): Promise<void> {
         imageId,
         bytes: item.bytes,
         mimeType: item.mimeType,
-        targetRatio,
       });
 
       createGeneratedImage({
