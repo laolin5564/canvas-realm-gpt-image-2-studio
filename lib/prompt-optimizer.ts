@@ -1,6 +1,7 @@
 import type { ImageProvider, OpenAIOAuthAccountRow } from "./types";
 import { describeNetworkError } from "./model-error-detail";
 import { fetchWithOriginHost, type OriginFetchInit } from "./origin-fetch";
+import { channelOriginHost } from "./http-host";
 
 export interface PromptOptimizationInput {
   prompt: string;
@@ -218,7 +219,7 @@ async function resolvePromptOptimizerRuntimeSettings(): Promise<PromptOptimizerR
     provider: "sub2api",
     baseUrl: imageSettings.sub2apiBaseUrl.replace(/\/+$/, ""),
     bearerToken: imageSettings.sub2apiApiKey,
-    hostHeader: appConfig.sub2apiHostHeader,
+    hostHeader: channelOriginHost(imageSettings.sub2apiBaseUrl, appConfig.sub2apiHostHeader),
     model: promptSettings.model,
   };
 }

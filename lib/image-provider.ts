@@ -31,6 +31,7 @@ import {
   tokenExpiresAt,
 } from "./openai-oauth";
 import { fetchWithOriginHost } from "./origin-fetch";
+import { channelOriginHost } from "./http-host";
 import { extractOpenAIOAuthImagesFromResponsesStream } from "./openai-image-bridge";
 import { formatModelError, formatModelErrorDetail } from "./model-error";
 import { fetchWithOptionalProxy } from "./proxy";
@@ -243,7 +244,7 @@ async function resolveImageProviderCandidates(signal?: AbortSignal): Promise<Ima
     channelName: channel.name,
     baseUrl: channel.baseUrl.replace(/\/+$/, ""),
     bearerToken: channel.apiKey,
-    hostHeader: appConfig.sub2apiHostHeader,
+    hostHeader: channelOriginHost(channel.baseUrl, appConfig.sub2apiHostHeader),
     imageModel: channel.model,
     imageConcurrency: settings.imageConcurrency,
   }));
