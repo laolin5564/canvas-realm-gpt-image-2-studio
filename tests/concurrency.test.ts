@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
   defaultUpstreamImageMaxInflight,
+  availableTaskSlots,
   normalizeImageConcurrency,
+  taskImageConcurrency,
+  withUpstreamImageSlot,
   resolveUpstreamImageMaxInflight,
   Semaphore,
 } from "@/lib/concurrency";
@@ -9,7 +12,8 @@ import { createGenerationTaskSchema, updateAdminSettingsSchema } from "@/lib/val
 
 describe("image concurrency", () => {
   test("normalizes configured concurrency to the supported range", () => {
-    expect(normalizeImageConcurrency(0)).toBe(1);
+    expect(normalizeImageConcurrency(0)).toBe(0);
+    expect(normalizeImageConcurrency(-5)).toBe(1);
     expect(normalizeImageConcurrency(1)).toBe(1);
     expect(normalizeImageConcurrency(100)).toBe(100);
     expect(normalizeImageConcurrency(101)).toBe(100);
@@ -17,6 +21,7 @@ describe("image concurrency", () => {
   });
 
   test("admin settings accept up to 100 concurrent requests", () => {
+    expect(updateAdminSettingsSchema.parse({ imageConcurrency: 0 }).imageConcurrency).toBe(0);
     expect(updateAdminSettingsSchema.parse({ imageConcurrency: 100 }).imageConcurrency).toBe(100);
     let rejected = false;
     try {
@@ -25,6 +30,19 @@ describe("image concurrency", () => {
       rejected = true;
     }
     expect(rejected).toBe(true);
+  });
+
+  test("unlimited scheduling keeps claiming even above the finite concurrency range", () => {
+    expect(availableTaskSlots(10, 9)).toBe(1);
+    expect(availableTaskSlots(10, 12)).toBe(0);
+    expect(availableTaskSlots(0, 12)).toBeGreaterThan(0);
+    expect(availableTaskSlots(0, 150)).toBeGreaterThan(0);
+  });
+
+  test("unlimited task batches still generate every image and honor a serial retry", () => {
+    expect(taskImageConcurrency(null, 0, 4)).toBe(4);
+    expect(taskImageConcurrency(1, 0, 4)).toBe(1);
+    expect(taskImageConcurrency(null, 2, 4)).toBe(2);
   });
 
   test("task-level low concurrency retry only accepts the safe override", () => {
@@ -50,6 +68,21 @@ describe("image concurrency", () => {
 });
 
 describe("上游生图信号量", () => {
+  test("unlimited mode starts more than the default 20 requests without a hidden queue", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let started = 0;
+    const pending = Array.from({ length: 25 }, () => withUpstreamImageSlot(async () => {
+      started += 1;
+      await gate;
+    }, true));
+    try {
+      expect(started).toBe(25);
+    } finally {
+      release();
+      await Promise.all(pending);
+    }
+  });
   test("同时在跑的操作数不会超过上限", async () => {
     const semaphore = new Semaphore(2);
     let active = 0;

@@ -153,13 +153,10 @@ export function AdminModelsClient() {
               </select>
             </div>
             <div className="field">
-              <label>同时处理的任务数</label>
+              <label>全站同时处理的任务数（0 表示不限）</label>
               <input className="input" type="number" min={imageConcurrencyLimits.min} max={imageConcurrencyLimits.max} value={imageConcurrency} onChange={(event) => setImageConcurrency(Number(event.target.value))} />
               <span className="field-hint">
-                worker 同时开工的任务上限。单个任务内部还会按张数拆成多个上游请求，真正打到上游的总并发另由
-                IMAGE_UPSTREAM_MAX_INFLIGHT 封顶：当前
-                <strong style={{ fontVariantNumeric: "tabular-nums" }}> {settings?.upstreamImageMaxInflight ?? "—"} </strong>
-                （只读，改环境变量后重启生效）。
+                填 0 时，全站任务和应用总请求均不设并发上限；单个 API 账号仍最多 10 个未完成任务。实际生成速度取决于上游可用容量。
               </span>
             </div>
             <div className="field">

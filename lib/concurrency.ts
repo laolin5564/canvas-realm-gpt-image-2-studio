@@ -1,14 +1,28 @@
 import { imageConcurrencyLimits } from "./types";
 
-export function normalizeImageConcurrency(value: unknown, fallback: number = imageConcurrencyLimits.min): number {
+export function normalizeImageConcurrency(value: unknown, fallback: number = 1): number {
   const numeric = Number(value);
   const candidate = Number.isFinite(numeric) ? Math.floor(numeric) : fallback;
-  return Math.min(Math.max(candidate, imageConcurrencyLimits.min), imageConcurrencyLimits.max);
+  // 0 is an explicit unlimited policy, not a large finite concurrency value.
+  return candidate === 0 ? 0 : Math.min(Math.max(candidate, 1), imageConcurrencyLimits.max);
+}
+
+// Keep each database claim bounded without limiting the total number of running tasks.
+export const taskClaimBatchSize = 100;
+
+export function availableTaskSlots(siteConcurrency: number, activeTasks: number): number {
+  const limit = normalizeImageConcurrency(siteConcurrency);
+  return limit === 0 ? taskClaimBatchSize : Math.max(0, limit - activeTasks);
+}
+
+export function taskImageConcurrency(requested: number | null, siteConcurrency: number, quantity: number): number {
+  const limit = siteConcurrency === 0 ? quantity : siteConcurrency;
+  return requested === null || requested === undefined ? limit : Math.min(Math.max(1, Math.floor(requested)), Math.max(1, limit));
 }
 
 // 进程级信号量：任务级并发（image_concurrency）只约束「同时在跑几个任务」，
 // 单个任务内部还会按 n=1 拆成多个上游请求，叠加起来可能瞬间打爆中转网关。
-// 所有对上游的生图请求都必须先拿到这里的槽位。
+// 有限模式下，上游请求需要取得槽位；全站不限模式直接执行，不保留隐含的总请求上限。
 export class Semaphore {
   private readonly limit: number;
   private active = 0;
@@ -93,8 +107,8 @@ export function upstreamImageSemaphore(): Semaphore {
   return upstreamSemaphore;
 }
 
-export function withUpstreamImageSlot<T>(operation: () => Promise<T>): Promise<T> {
-  return upstreamImageSemaphore().run(operation);
+export async function withUpstreamImageSlot<T>(operation: () => Promise<T>, unlimited = false): Promise<T> {
+  return unlimited ? operation() : upstreamImageSemaphore().run(operation);
 }
 
 // 仅供测试：让下一次 upstreamImageSemaphore() 重新读取环境变量。

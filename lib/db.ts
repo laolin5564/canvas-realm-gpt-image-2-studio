@@ -2579,6 +2579,11 @@ export function recordImageGenerationSuccess(): {
 } {
   resetImageTimeoutStreak();
 
+  // An administrator's unlimited policy must not be overwritten by an older auto-degrade record.
+  if (getImageConcurrencySetting() === 0) {
+    return { recovered: false, restoredConcurrency: null };
+  }
+
   const degradedAt = getAppSetting("image_auto_degraded_at");
   const storedBefore = Number(getAppSetting("image_concurrency_before_degrade") ?? 0);
   if (!degradedAt || !Number.isFinite(storedBefore) || storedBefore <= 1) {
@@ -2664,7 +2669,7 @@ export function getPublicAdminSettings(): PublicAdminSettings {
     openaiOAuthProxyDisplay: redactProxyUrl(settings.openaiOAuthProxyUrl),
     imageModel: settings.imageModel,
     imageConcurrency: settings.imageConcurrency,
-    upstreamImageMaxInflight: resolveUpstreamImageMaxInflight(),
+    upstreamImageMaxInflight: settings.imageConcurrency === 0 ? 0 : resolveUpstreamImageMaxInflight(),
     imageRetentionDays: getImageRetentionDaysSetting(),
     promptOptimizerModel: promptOptimizer.model,
     siteTitle: site.siteTitle,
@@ -3216,7 +3221,7 @@ export function claimNextQueuedTask(): GenerationTaskRow | null {
 
 export function claimQueuedTasks(limit: number): GenerationTaskRow[] {
   const database = getDb();
-  const boundedLimit = normalizeImageConcurrency(limit);
+  const boundedLimit = Math.max(1, normalizeImageConcurrency(limit));
   const startedAt = nowIso();
 
   try {
@@ -4156,7 +4161,7 @@ export function getAdminStats(): AdminStats {
       failureRate,
       availabilityRate: weekTotal > 0 ? Number((100 - failureRate).toFixed(1)) : 100,
       weekTimeoutTasks: timeoutRow?.count ?? 0,
-      upstreamMaxInflight: resolveUpstreamImageMaxInflight(),
+      upstreamMaxInflight: runtimeSettings.imageConcurrency === 0 ? 0 : resolveUpstreamImageMaxInflight(),
     },
     channelHealth: {
       last24h: listRecentAttemptStats(24),

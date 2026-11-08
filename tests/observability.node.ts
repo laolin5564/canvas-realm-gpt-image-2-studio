@@ -259,3 +259,20 @@ test("generation_attempts 建表与索引幂等，重复 getDb 不会重建", as
   ).count;
   assert.equal(afterCount, before);
 });
+
+test("全站不限不会因超时降级或旧恢复记录重新变成有限并发", async () => {
+  const db = await loadDb();
+  db.setAppSetting("image_concurrency", "0");
+  db.setAppSetting("image_auto_degraded_at", new Date().toISOString());
+  db.setAppSetting("image_concurrency_before_degrade", "10");
+  for (let i = 0; i < 3; i += 1) {
+    assert.equal(db.recordImageTimeoutFailure().degraded, false);
+    assert.equal(db.getImageConcurrencySetting(), 0);
+  }
+  for (let i = 0; i < 3; i += 1) {
+    assert.equal(db.recordImageGenerationSuccess().recovered, false);
+    assert.equal(db.getImageConcurrencySetting(), 0);
+  }
+  assert.equal(db.getPublicAdminSettings().upstreamImageMaxInflight, 0);
+  assert.equal(db.getAdminStats().health.upstreamMaxInflight, 0);
+});

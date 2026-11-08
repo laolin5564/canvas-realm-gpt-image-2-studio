@@ -103,7 +103,7 @@ export function AdminOverviewClient() {
         <StatCard label="模型可用率" value={`${stats.health.availabilityRate}%`} icon={<Activity size={18} />} />
         <StatCard label="平均耗时" value={stats.health.averageDurationSeconds === null ? "暂无" : `${stats.health.averageDurationSeconds}s`} icon={<Clock size={18} />} />
         <StatCard label="本周超时任务" value={stats.health.weekTimeoutTasks} icon={<AlertTriangle size={18} />} />
-        <StatCard label="当前并发" value={stats.health.imageConcurrency} icon={<Gauge size={18} />} />
+        <StatCard label="全站并发上限" value={stats.health.imageConcurrency === 0 ? "不限" : stats.health.imageConcurrency} icon={<Gauge size={18} />} />
       </section>
 
       <section className="admin-command-grid">
@@ -176,9 +176,9 @@ export function AdminOverviewClient() {
               <span>{stats.health.imageModel}</span>
             </div>
             <div className="popular-row">
-              <strong>上游并发上限</strong>
+              <strong>应用总请求上限</strong>
               <span className="badge" style={numericCellStyle}>
-                IMAGE_UPSTREAM_MAX_INFLIGHT {stats.health.upstreamMaxInflight}
+                {stats.health.upstreamMaxInflight === 0 ? "不限" : stats.health.upstreamMaxInflight}
               </span>
             </div>
             <div className="popular-row">

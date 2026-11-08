@@ -79,7 +79,7 @@ export interface PublicImageProviderChannel {
 }
 
 export const imageConcurrencyLimits = {
-  min: 1,
+  min: 0,
   max: 100,
 } as const;
 

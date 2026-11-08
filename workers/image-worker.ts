@@ -66,7 +66,7 @@ async function main(): Promise<void> {
       const claimed = fillProcessingSlots(concurrency);
       if (claimed > 0) {
         console.log(
-          `claimed ${claimed} image task(s), in_flight=${inFlightTaskCount()}, concurrency=${concurrency}`,
+          `claimed ${claimed} image task(s), in_flight=${inFlightTaskCount()}, concurrency=${concurrency === 0 ? "unlimited" : concurrency}`,
         );
       }
       if (Date.now() - lastReclaimAt > reclaimIntervalMs) {

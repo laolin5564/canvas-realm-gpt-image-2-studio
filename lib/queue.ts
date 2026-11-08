@@ -13,7 +13,7 @@ import {
   resetImageTimeoutStreak,
   updateTaskProgressStage,
 } from "./db";
-import { normalizeImageConcurrency } from "./concurrency";
+import { availableTaskSlots, normalizeImageConcurrency, taskClaimBatchSize } from "./concurrency";
 import { callImageModel } from "./image-provider";
 import { isModelTimeoutMessage } from "./model-error";
 import { describeTaskFailure } from "./model-error-detail";
@@ -134,7 +134,7 @@ async function processClaimedTask(task: GenerationTaskRow): Promise<void> {
 
 export async function processQueuedTasks(maxTasks = 1): Promise<number> {
   const concurrency = normalizeImageConcurrency(maxTasks);
-  const tasks = claimQueuedTasks(concurrency);
+  const tasks = claimQueuedTasks(concurrency === 0 ? taskClaimBatchSize : concurrency);
   await Promise.all(tasks.map((task) => processClaimedTask(task)));
   return tasks.length;
 }
@@ -171,7 +171,7 @@ function notifySlotFreed(): void {
 }
 
 export function fillProcessingSlots(maxConcurrency: number): number {
-  const capacity = normalizeImageConcurrency(maxConcurrency) - inFlightTasks.size;
+  const capacity = availableTaskSlots(maxConcurrency, inFlightTasks.size);
   if (capacity <= 0) {
     return 0;
   }

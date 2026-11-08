@@ -21,7 +21,7 @@ import {
 } from "./reference-images";
 import { imageErrorStatus, isRetryableImageError } from "./image-retry";
 import { modelErrorDetail, UpstreamImageDetailError } from "./model-error-detail";
-import { withUpstreamImageSlot } from "./concurrency";
+import { taskImageConcurrency, withUpstreamImageSlot } from "./concurrency";
 import {
   decodeOpenAIIdToken,
   decryptToken,
@@ -122,7 +122,7 @@ async function callImageModelWithSettings(
   delivered: () => number,
   deliver: (image: MaterializedImage) => Promise<void>,
 ): Promise<void> {
-  const taskConcurrency = normalizeTaskImageConcurrency(task.requested_concurrency, settings.imageConcurrency);
+  const taskConcurrency = taskImageConcurrency(task.requested_concurrency, settings.imageConcurrency, task.quantity);
 
   await runImageGenerationBatches<MaterializedImage>({
     total: task.quantity,
@@ -193,13 +193,6 @@ async function withAttemptTelemetry<T>(
     save(false, imageErrorStatus(error), reason);
     throw error;
   }
-}
-
-function normalizeTaskImageConcurrency(value: number | null, fallback: number): number {
-  if (value === null || value === undefined) {
-    return fallback;
-  }
-  return Math.min(Math.max(1, Math.floor(value)), Math.max(1, fallback));
 }
 
 async function resolveImageProviderCandidates(signal?: AbortSignal): Promise<ImageRequestSettings[]> {
@@ -333,6 +326,7 @@ async function requestTextToImage(
 
       return readModelResponse(response, "image generation failed", settings);
     }),
+    settings.imageConcurrency === 0,
   );
 }
 
@@ -379,6 +373,7 @@ async function requestImageEdit(
         return readModelResponse(response, "image edit failed", settings, { referenceBytes });
       });
     }),
+    settings.imageConcurrency === 0,
   );
 }
 
@@ -443,6 +438,7 @@ async function requestOpenAIOAuthImage(
       }
       return { data: images };
     }),
+    settings.imageConcurrency === 0,
   );
 }
 

@@ -749,7 +749,7 @@ export function AdminClient() {
             <StatCard label="模型可用率" value={`${displayStats.health.availabilityRate}%`} icon={<Activity size={18} />} />
             <StatCard label="平均耗时" value={displayStats.health.averageDurationSeconds === null ? "暂无" : `${displayStats.health.averageDurationSeconds}s`} icon={<Clock size={18} />} />
             <StatCard label="本周超时任务" value={displayStats.health.weekTimeoutTasks} icon={<AlertTriangle size={18} />} />
-            <StatCard label="当前并发" value={displayStats.health.imageConcurrency} icon={<Gauge size={18} />} />
+            <StatCard label="全站并发上限" value={displayStats.health.imageConcurrency === 0 ? "不限" : displayStats.health.imageConcurrency} icon={<Gauge size={18} />} />
           </section>
 
           <div className="admin-dashboard-grid">
@@ -1459,7 +1459,7 @@ export function AdminClient() {
                 </div>
               )}
               <div className="field">
-                <label htmlFor="imageConcurrency">并发请求数</label>
+                <label htmlFor="imageConcurrency">全站同时处理的任务数（0 表示不限）</label>
                 <input
                   id="imageConcurrency"
                   className="input"
@@ -1469,6 +1469,7 @@ export function AdminClient() {
                   value={imageConcurrency}
                   onChange={(event) => setImageConcurrency(Number(event.target.value))}
                 />
+                <small className="field-hint">填 0 表示全站任务和应用总请求不限；单个 API 账号仍最多 10 个未完成任务。</small>
               </div>
               <div className="field">
                 <label htmlFor="imageRetentionDays">图片自动删除天数</label>

@@ -425,7 +425,7 @@ export interface LimitRow {
 
 export const limitRows: LimitRow[] = [
   { title: "调用频率", detail: "每把密钥 60 次 / 分钟。超限返回 429 rate_limited，响应头 Retry-After 告诉你还要等几秒。" },
-  { title: "并发任务", detail: "每个账号同时最多 10 个 queued 或 processing 的 API 任务，超出返回 429 too_many_active_tasks。" },
+  { title: "并发任务", detail: "每个账号同时最多 10 个 queued 或 processing 的 API 任务，超出返回 429 too_many_active_tasks。全站不设任务总并发上限，实际生成速度取决于上游可用容量。" },
   { title: "额度扣减", detail: "与网页端共用同一份月度额度，按张数扣减，创建任务前校验，额度不足返回 403 quota_exceeded。" },
   { title: "图片链接", detail: "任务返回的 url / thumbnail_url 是带签名的绝对地址，7 天内可免鉴权下载；过期后重新查询任务拿新链接。" },
   { title: "任务来源", detail: "API 任务不会创建对话，但生成的图片照常出现在历史记录页。" },
