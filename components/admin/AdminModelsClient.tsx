@@ -20,6 +20,8 @@ export function AdminModelsClient() {
   const [channels, setChannels] = useState<EditableChannel[]>([]);
   const [imageConcurrency, setImageConcurrency] = useState(2);
   const [promptOptimizerModel, setPromptOptimizerModel] = useState("gpt-5.5");
+  const [promptOptimizerBaseUrl, setPromptOptimizerBaseUrl] = useState("");
+  const [promptOptimizerApiKey, setPromptOptimizerApiKey] = useState("");
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
@@ -34,6 +36,8 @@ export function AdminModelsClient() {
       setImageProvider(payload.settings.imageProvider);
       setImageConcurrency(payload.settings.imageConcurrency);
       setPromptOptimizerModel(payload.settings.promptOptimizerModel);
+      setPromptOptimizerBaseUrl(payload.settings.promptOptimizerBaseUrl);
+      setPromptOptimizerApiKey("");
       setChannels(
         payload.settings.imageProviderChannels.length > 0
           ? payload.settings.imageProviderChannels.map((channel) => ({ ...channel, apiKey: "" }))
@@ -98,6 +102,8 @@ export function AdminModelsClient() {
           imageProvider,
           imageConcurrency,
           promptOptimizerModel,
+          promptOptimizerBaseUrl: promptOptimizerBaseUrl.trim(),
+          promptOptimizerApiKey: promptOptimizerApiKey.trim() || undefined,
           imageProviderChannels:
             imageProvider === "openai_oauth"
               ? undefined
@@ -162,6 +168,18 @@ export function AdminModelsClient() {
             <div className="field">
               <label>提示词优化模型</label>
               <input className="input" value={promptOptimizerModel} onChange={(event) => setPromptOptimizerModel(event.target.value)} placeholder="gpt-5.5" />
+            </div>
+          </div>
+
+          <div className="field-row">
+            <div className="field">
+              <label>提示词优化独立 Base URL</label>
+              <input className="input" value={promptOptimizerBaseUrl} onChange={(event) => setPromptOptimizerBaseUrl(event.target.value)} placeholder="https://api.example.com/v1" />
+              <span className="field-hint">填写后，提示词优化独立使用下方 Key；留空则跟随图片接口。</span>
+            </div>
+            <div className="field">
+              <label>提示词优化独立 API Key</label>
+              <input className="input" type="password" autoComplete="new-password" value={promptOptimizerApiKey} onChange={(event) => setPromptOptimizerApiKey(event.target.value)} placeholder={settings?.promptOptimizerApiKeyConfigured ? "已配置，留空保持原 Key" : "填写独立文字接口的 API Key"} />
             </div>
           </div>
 

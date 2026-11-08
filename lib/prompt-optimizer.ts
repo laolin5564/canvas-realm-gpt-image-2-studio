@@ -195,6 +195,19 @@ async function resolvePromptOptimizerRuntimeSettings(): Promise<PromptOptimizerR
   const imageSettings = db.getRuntimeImageSettings();
   const promptSettings = db.getPromptOptimizerSettings();
 
+  if (promptSettings.baseUrl) {
+    if (!promptSettings.apiKey) {
+      throw new Error("独立提示词优化接口 API Key 未配置。");
+    }
+    return {
+      provider: "sub2api",
+      baseUrl: promptSettings.baseUrl.replace(/\/+$/, ""),
+      bearerToken: promptSettings.apiKey,
+      hostHeader: channelOriginHost(promptSettings.baseUrl, appConfig.sub2apiHostHeader),
+      model: promptSettings.model,
+    };
+  }
+
   if (imageSettings.imageProvider === "openai_oauth") {
     const account = db.getUsableOpenAIOAuthAccount();
     if (!account) {

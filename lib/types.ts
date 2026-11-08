@@ -623,6 +623,8 @@ export interface PublicAdminSettings {
   upstreamImageMaxInflight: number;
   imageRetentionDays: number;
   promptOptimizerModel: string;
+  promptOptimizerBaseUrl: string;
+  promptOptimizerApiKeyConfigured: boolean;
   siteTitle: string;
   siteSubtitle: string;
   registrationEnabled: boolean;

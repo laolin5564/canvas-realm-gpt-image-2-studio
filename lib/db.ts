@@ -235,6 +235,8 @@ type AppSettingKey =
   | "image_model"
   | "image_provider_channels"
   | "prompt_optimizer_model"
+  | "prompt_optimizer_base_url"
+  | "prompt_optimizer_api_key"
   | "image_concurrency"
   | "image_timeout_streak"
   | "image_auto_degraded_at"
@@ -2526,10 +2528,37 @@ export function getImageConcurrencySetting(): number {
 
 export function getPromptOptimizerSettings(): {
   model: string;
+  baseUrl: string;
+  apiKey: string;
 } {
   return {
     model: getAppSetting("prompt_optimizer_model") || appConfig.promptOptimizerModel,
+    baseUrl: getAppSetting("prompt_optimizer_base_url") || "",
+    apiKey: getAppSetting("prompt_optimizer_api_key") || "",
   };
+}
+
+export function savePromptOptimizerConnection(input: { baseUrl?: string; apiKey?: string }): void {
+  const database = getDb();
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const current = getPromptOptimizerSettings();
+    const baseUrl = (input.baseUrl ?? current.baseUrl).trim().replace(/\/+$/, "");
+    const apiKey = input.apiKey?.trim() || current.apiKey;
+    if (baseUrl && !apiKey) {
+      throw new Error("独立提示词优化接口需要配置自己的 API Key");
+    }
+    if (input.baseUrl !== undefined) {
+      setAppSetting("prompt_optimizer_base_url", baseUrl);
+    }
+    if (input.apiKey?.trim()) {
+      setAppSetting("prompt_optimizer_api_key", apiKey);
+    }
+    database.exec("COMMIT");
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 export function getImageRetentionDaysSetting(): number {
@@ -2672,6 +2701,8 @@ export function getPublicAdminSettings(): PublicAdminSettings {
     upstreamImageMaxInflight: settings.imageConcurrency === 0 ? 0 : resolveUpstreamImageMaxInflight(),
     imageRetentionDays: getImageRetentionDaysSetting(),
     promptOptimizerModel: promptOptimizer.model,
+    promptOptimizerBaseUrl: promptOptimizer.baseUrl,
+    promptOptimizerApiKeyConfigured: promptOptimizer.apiKey.length > 0,
     siteTitle: site.siteTitle,
     siteSubtitle: site.siteSubtitle,
     registrationEnabled: registration.registrationEnabled,

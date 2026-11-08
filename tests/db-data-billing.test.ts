@@ -16,6 +16,7 @@ const nodeSuites = [
   "observability.node.ts",
   "permissions.node.ts",
   "queue-claim.node.ts",
+  "prompt-optimizer.node.ts",
 ];
 
 describe("数据层与账务用例（node:test）", () => {

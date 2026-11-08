@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getPublicAdminSettings, getUserGroup, saveImageProviderChannels, setAppSetting } from "@/lib/db";
+import { getPublicAdminSettings, getUserGroup, saveImageProviderChannels, savePromptOptimizerConnection, setAppSetting } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
 import { handleRouteError, jsonError } from "@/lib/http";
 import { normalizeProxyUrl } from "@/lib/proxy";
@@ -21,6 +21,14 @@ export async function PUT(request: NextRequest): Promise<NextResponse> {
   try {
     requireAdmin(request);
     const input = updateAdminSettingsSchema.parse(await request.json());
+
+    if (input.promptOptimizerBaseUrl !== undefined || input.promptOptimizerApiKey !== undefined) {
+      try {
+        savePromptOptimizerConnection({ baseUrl: input.promptOptimizerBaseUrl, apiKey: input.promptOptimizerApiKey });
+      } catch (error) {
+        return jsonError(error instanceof Error ? error.message : "提示词优化接口配置不正确", 400);
+      }
+    }
 
     if (input.imageProvider) {
       setAppSetting("image_provider", input.imageProvider);

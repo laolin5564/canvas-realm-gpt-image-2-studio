@@ -104,6 +104,8 @@ export function AdminClient() {
   const [imageModel, setImageModel] = useState("");
   const [providerChannels, setProviderChannels] = useState<EditableImageProviderChannel[]>([]);
   const [promptOptimizerModel, setPromptOptimizerModel] = useState("gpt-5.5");
+  const [promptOptimizerBaseUrl, setPromptOptimizerBaseUrl] = useState("");
+  const [promptOptimizerApiKey, setPromptOptimizerApiKey] = useState("");
   const [imageConcurrency, setImageConcurrency] = useState(2);
   const [imageRetentionDays, setImageRetentionDays] = useState(0);
   const [siteTitle, setSiteTitle] = useState("");
@@ -182,6 +184,8 @@ export function AdminClient() {
           }],
     );
     setPromptOptimizerModel(payload.settings.promptOptimizerModel);
+    setPromptOptimizerBaseUrl(payload.settings.promptOptimizerBaseUrl);
+    setPromptOptimizerApiKey("");
     setImageConcurrency(payload.settings.imageConcurrency);
     setImageRetentionDays(payload.settings.imageRetentionDays);
     setSiteTitle(payload.settings.siteTitle);
@@ -404,6 +408,8 @@ export function AdminClient() {
         }>;
         imageModel?: string;
         promptOptimizerModel?: string;
+        promptOptimizerBaseUrl?: string;
+        promptOptimizerApiKey?: string;
         imageConcurrency?: number;
         imageRetentionDays?: number;
         siteTitle?: string;
@@ -421,6 +427,8 @@ export function AdminClient() {
         registrationDefaultGroupId,
         registrationDefaultQuota,
         promptOptimizerModel,
+        promptOptimizerBaseUrl: promptOptimizerBaseUrl.trim(),
+        promptOptimizerApiKey: promptOptimizerApiKey.trim() || undefined,
       };
 
       if (!isOpenAIOAuthProvider) {
@@ -450,6 +458,8 @@ export function AdminClient() {
       setImageModel(payload.settings.imageModel);
       setProviderChannels(payload.settings.imageProviderChannels.map((channel) => ({ ...channel, apiKey: "" })));
       setPromptOptimizerModel(payload.settings.promptOptimizerModel);
+      setPromptOptimizerBaseUrl(payload.settings.promptOptimizerBaseUrl);
+      setPromptOptimizerApiKey("");
       setImageConcurrency(payload.settings.imageConcurrency);
       setImageRetentionDays(payload.settings.imageRetentionDays);
       setSiteTitle(payload.settings.siteTitle);
@@ -1498,8 +1508,16 @@ export function AdminClient() {
                     placeholder="gpt-5.5"
                   />
                   <small className="field-hint">
-                    工作台“优化提示词”复用上方图片接口模式的 Base URL / API Key / OpenAI OAuth，只切换为这个文本模型。
+                    配置独立接口后，优化提示词不受图片渠道切换影响；独立 Base URL 留空时跟随图片接口。
                   </small>
+                </div>
+                <div className="field">
+                  <label htmlFor="promptOptimizerBaseUrl">提示词优化独立 Base URL</label>
+                  <input id="promptOptimizerBaseUrl" className="input" value={promptOptimizerBaseUrl} onChange={(event) => setPromptOptimizerBaseUrl(event.target.value)} placeholder="https://api.example.com/v1" />
+                </div>
+                <div className="field">
+                  <label htmlFor="promptOptimizerApiKey">提示词优化独立 API Key</label>
+                  <input id="promptOptimizerApiKey" className="input" type="password" autoComplete="new-password" value={promptOptimizerApiKey} onChange={(event) => setPromptOptimizerApiKey(event.target.value)} placeholder={settings?.promptOptimizerApiKeyConfigured ? "已配置，留空保持原 Key" : "填写独立文字接口的 API Key"} />
                 </div>
               </div>
               <button className="button primary" type="button" onClick={saveSettings} disabled={settingsSaving}>
