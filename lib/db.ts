@@ -3148,7 +3148,7 @@ export function listApiGenerationTasks(userId: string, limit: number): Generatio
   );
 }
 
-/** 同时在跑的 API 任务数（queued + processing），用于每用户 5 个的并发闸。 */
+/** 同时在跑的 API 任务数（queued + processing），用于每用户 10 个的并发闸。 */
 export function countActiveApiTasks(userId: string): number {
   const row = castRow<{ count: number }>(
     getDb()

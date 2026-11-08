@@ -24,7 +24,7 @@ import { ImageValidationError, readStorageFile } from "./storage";
 import type { CurrentUser, GeneratedImageRow, GenerationTaskRow } from "./types";
 
 /** 每用户同时最多几个 queued/processing 的 API 任务。 */
-export const maxActiveApiTasksPerUser = 5;
+export const maxActiveApiTasksPerUser = 10;
 
 /** 每个 /api/v1 请求的固定三步：总开关 → Bearer 鉴权 → 每密钥限流。 */
 export function authenticateApiRequest(request: NextRequest): ApiKeyPrincipal {

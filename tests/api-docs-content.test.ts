@@ -185,7 +185,7 @@ describe("错误码与限制说明", () => {
   test("限制说明覆盖频率、并发、额度、链接有效期", () => {
     const joined = limitRows.map((row) => `${row.title}${row.detail}`).join("\n");
     expect(joined).toContain("60");
-    expect(joined).toContain("5");
+    expect(limitRows.find((row) => row.title === "并发任务")?.detail).toContain("10");
     expect(joined).toContain("7 天");
     expect(joined).toContain("api_disabled");
   });

@@ -424,8 +424,11 @@ test("assertApiActiveTaskLimit / assertApiQuota 抛的是契约里的 code", asy
   const user = await createTestUser("闸门用户");
 
   server.assertApiActiveTaskLimit(user.id);
-  for (let index = 0; index < server.maxActiveApiTasksPerUser; index += 1) {
-    db.createGenerationTask({
+  const tasks = [];
+  for (let index = 0; index < 10; index += 1) {
+    // 包括第 6～10 个任务在内，创建之前都应放行。
+    server.assertApiActiveTaskLimit(user.id);
+    tasks.push(db.createGenerationTask({
       userId: user.id,
       mode: "text_to_image",
       prompt: `闸门 ${index}`,
@@ -437,12 +440,20 @@ test("assertApiActiveTaskLimit / assertApiQuota 抛的是契约里的 code", asy
       referenceStrength: 0.6,
       styleStrength: 0.7,
       source: "api",
-    });
+    }));
   }
+  assert.equal(db.countActiveApiTasks(user.id), 10);
+  // processing 与 queued 共用同一个用户限额。
+  db.getDb().prepare("UPDATE generation_tasks SET status = 'processing' WHERE id = ?").run(tasks[0].id);
   assert.throws(
     () => server.assertApiActiveTaskLimit(user.id),
-    (error: unknown) => errorCode(error) === "too_many_active_tasks" && errorStatus(error) === 429,
+    (error: unknown) => errorCode(error) === "too_many_active_tasks" && errorStatus(error) === 429 && (error as Error).message.includes("10"),
   );
+  const otherUser = await createTestUser("另一位并发用户");
+  server.assertApiActiveTaskLimit(otherUser.id);
+  db.cancelGenerationTask(tasks[0].id);
+  assert.equal(db.countActiveApiTasks(user.id), 9);
+  server.assertApiActiveTaskLimit(user.id);
 
   const quotaUser = await createTestUser("额度用户");
   db.updateUser(quotaUser.id, { monthlyQuota: 1 });

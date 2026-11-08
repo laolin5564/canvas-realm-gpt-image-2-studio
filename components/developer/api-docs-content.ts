@@ -406,7 +406,7 @@ export const errorCodes: ErrorCodeRow[] = [
   { code: "validation_error", status: 400, meaning: "参数不合法，message 会指出具体字段。" },
   { code: "not_found", status: 404, meaning: "任务或图片不存在。" },
   { code: "rate_limited", status: 429, meaning: "超过每分钟 60 次调用，响应头 Retry-After 给出等待秒数。" },
-  { code: "too_many_active_tasks", status: 429, meaning: "同时进行中的 API 任务超过 5 个，等已有任务完成再提交。" },
+  { code: "too_many_active_tasks", status: 429, meaning: "同时进行中的 API 任务超过 10 个，等已有任务完成再提交。" },
   { code: "api_disabled", status: 403, meaning: "管理员已在后台关闭开放 API。" },
   { code: "server_error", status: 500, meaning: "服务端异常，可稍后重试或联系管理员。" },
 ];
@@ -425,7 +425,7 @@ export interface LimitRow {
 
 export const limitRows: LimitRow[] = [
   { title: "调用频率", detail: "每把密钥 60 次 / 分钟。超限返回 429 rate_limited，响应头 Retry-After 告诉你还要等几秒。" },
-  { title: "并发任务", detail: "每个账号同时最多 5 个 queued 或 processing 的 API 任务，超出返回 429 too_many_active_tasks。" },
+  { title: "并发任务", detail: "每个账号同时最多 10 个 queued 或 processing 的 API 任务，超出返回 429 too_many_active_tasks。" },
   { title: "额度扣减", detail: "与网页端共用同一份月度额度，按张数扣减，创建任务前校验，额度不足返回 403 quota_exceeded。" },
   { title: "图片链接", detail: "任务返回的 url / thumbnail_url 是带签名的绝对地址，7 天内可免鉴权下载；过期后重新查询任务拿新链接。" },
   { title: "任务来源", detail: "API 任务不会创建对话，但生成的图片照常出现在历史记录页。" },
